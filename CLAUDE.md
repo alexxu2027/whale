@@ -8,6 +8,13 @@ Multiplayer market-making party game. The source of truth for product decisions 
 - `backend/`: Python + FastAPI + WebSockets, managed with `uv`
 - PostgreSQL later; MVP keeps live match state in memory
 
+## Commands (run from `backend/`)
+
+- `uv run pytest`: all tests, including the Hypothesis stateful engine tests
+- `uv run python bench/bench_engine.py`: engine throughput benchmark
+
+Backend code lives in the `whale` package (`backend/whale/`), so PRD §27's `engine/` is `whale/engine/`.
+
 ## Rules that must hold
 
 - **The server is authoritative.** Order validation, matching, and settlement happen server-side only.
