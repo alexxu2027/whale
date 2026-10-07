@@ -16,54 +16,14 @@ from whale.engine import (
     OrderAccepted,
     OrderAmended,
     OrderCancelled,
-    OrderRejected,
     OrderType,
     PlaceOrder,
     QuoteUpdated,
     RejectReason,
-    SetQuote,
     SetStatus,
-    Side,
-    Trade,
 )
 
-from .invariants import check_invariants
-
-BUY, SELL = Side.BUY, Side.SELL
-CONFIG = MarketConfig(rate_limit_per_sec=None)
-
-
-class Harness:
-    """Small wrapper that advances time and checks invariants on every call."""
-
-    def __init__(self, config: MarketConfig = CONFIG, players: tuple[str, ...] = ("alex", "sam", "maya")) -> None:
-        self.ex = Exchange(config, players)
-        self.ts = 0
-
-    def send(self, cmd_type: type, **kw: object) -> list[Event]:
-        self.ts += 1
-        events = self.ex.apply(cmd_type(ts=self.ts, **kw))
-        check_invariants(self.ex)
-        return events
-
-    def place(self, player: str, side: Side, price: int, qty: int, **kw: object) -> list[Event]:
-        return self.send(PlaceOrder, player_id=player, side=side, price=price, qty=qty, **kw)
-
-    def order_id(self, events: list[Event]) -> int:
-        return next(e.order_id for e in events if isinstance(e, OrderAccepted))
-
-    def account(self, player: str):
-        return self.ex.accounts[player]
-
-
-def trades(events: list[Event]) -> list[Trade]:
-    return [e for e in events if isinstance(e, Trade)]
-
-
-def rejection(events: list[Event]) -> RejectReason:
-    (e,) = events
-    assert isinstance(e, OrderRejected)
-    return e.reason
+from .harness import BUY, SELL, Harness, rejection, trades
 
 
 @pytest.fixture
@@ -209,7 +169,7 @@ def test_amend_price_into_cross_matches(h: Harness) -> None:
     oid = h.order_id(h.place("alex", BUY, 98, 3))
     events = h.send(AmendOrder, player_id="alex", order_id=oid, qty=3, price=101)
     (t,) = trades(events)
-    assert (t.price, t.taker_order_id) == (101, oid)
+    assert (t.price, t.buy_order_id, t.taker_id) == (101, oid, "alex")
 
 
 def test_amend_no_change_rejected(h: Harness) -> None:
@@ -230,7 +190,7 @@ def test_cancel_all(h: Harness) -> None:
 
 
 def quote(h: Harness, player: str, bid: int, bid_qty: int, ask: int, ask_qty: int) -> list[Event]:
-    return h.send(SetQuote, player_id=player, bid_price=bid, bid_qty=bid_qty, ask_price=ask, ask_qty=ask_qty)
+    return h.quote(player, bid, bid_qty, ask, ask_qty)
 
 
 def test_quote_posts_both_sides(h: Harness) -> None:

@@ -638,7 +638,8 @@ Alex bought 5 @ 108
 Rules:
 
 - A call is a bilateral request for quote (RFQ). The trade executes directly between A and B, not through the order book, but it counts as a normal trade for positions, the feed, and analytics. B is the maker and A is the taker.
-- If B does not answer in time, B's current Your Market is used as their answer, provided it meets the width and size limits. If it does not, the engine builds a quote of the maximum width W centered on the middle of B's current market (or on the public fair value if B has no market), and B pays a small **no-quote penalty**.
+- If B does not answer in time, B's current Your Market is used as their answer, provided it meets the width and size limits. If it does not, the engine builds a quote of the maximum width W centered on the middle of B's current market (or the middle of the order book if B has no market, or the recipe's average if the book is empty too), and B pays a small **no-quote penalty**.
+- While B's answer is live, its size is reserved against B's position limit on both sides, so B can always honor it.
 - Rate limits: each player can make one call every 15 seconds. A player cannot be called again while they are answering a call, or within 5 seconds of finishing one.
 - Calls are public as they happen ("Alex is asking Sam for a market…"). The pressure of answering in front of everyone is part of the fun.
 

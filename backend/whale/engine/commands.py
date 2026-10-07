@@ -68,6 +68,44 @@ class SetQuote:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class CallPlayer:
+    """Make Me a Market: ask ``target_id`` for a two-sided price (PRD §8.2)."""
+
+    player_id: str
+    ts: int
+    target_id: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AnswerCall:
+    """The called player's two-sided price, good for ``qty`` on either side."""
+
+    player_id: str
+    ts: int
+    call_id: int
+    bid_price: int
+    ask_price: int
+    qty: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DecideCall:
+    """The caller buys at the ask (BUY), sells at the bid (SELL), or passes (None)."""
+
+    player_id: str
+    ts: int
+    call_id: int
+    side: Side | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Tick:
+    """Advance time with no other effect, so call deadlines can expire."""
+
+    ts: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SetStatus:
     """Administrative: issued by the round controller, never by a player."""
 
@@ -75,4 +113,15 @@ class SetStatus:
     status: MarketStatus
 
 
-Command = PlaceOrder | CancelOrder | CancelAll | AmendOrder | SetQuote | SetStatus
+Command = (
+    PlaceOrder
+    | CancelOrder
+    | CancelAll
+    | AmendOrder
+    | SetQuote
+    | CallPlayer
+    | AnswerCall
+    | DecideCall
+    | Tick
+    | SetStatus
+)

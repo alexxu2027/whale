@@ -22,6 +22,7 @@ class OrderType(StrEnum):
 
 
 class MarketStatus(StrEnum):
+    PRE_OPEN = "pre_open"  # opening phase: quotes rest without matching
     OPEN = "open"
     HALTED = "halted"  # no new risk; cancels and size reductions allowed
     CLOSED = "closed"  # round over; book emptied, ready to settle
@@ -40,6 +41,14 @@ class RejectReason(StrEnum):
     NOT_OWNER = "not_owner"
     DUPLICATE_CLIENT_ORDER_ID = "duplicate_client_order_id"
     NO_CHANGE = "no_change"
+    SELF_CALL = "self_call"
+    PLAYER_BUSY = "player_busy"
+    CALL_COOLDOWN = "call_cooldown"
+    TARGET_AT_LIMIT = "target_at_limit"
+    UNKNOWN_CALL = "unknown_call"
+    NOT_YOUR_CALL = "not_your_call"
+    CALL_WRONG_STAGE = "call_wrong_stage"
+    INVALID_TRANSITION = "invalid_transition"
 
 
 class CancelReason(StrEnum):
@@ -48,6 +57,19 @@ class CancelReason(StrEnum):
     SELF_TRADE_PREVENTED = "self_trade_prevented"
     QUOTE_REPLACED = "quote_replaced"
     MARKET_CLOSED = "market_closed"
+
+
+class TradeKind(StrEnum):
+    BOOK = "book"  # an incoming order matched a resting order
+    AUCTION = "auction"  # opening auction; no maker or taker, no fees
+    CALL = "call"  # Make Me a Market; responder is maker, caller is taker
+
+
+class CallOutcome(StrEnum):
+    TRADED = "traded"
+    PASSED = "passed"
+    DECISION_TIMEOUT = "decision_timeout"  # caller didn't decide in time
+    CANCELLED = "cancelled"  # halt, close, or responder unable to quote
 
 
 @dataclass(slots=True)

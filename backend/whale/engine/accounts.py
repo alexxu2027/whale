@@ -17,12 +17,14 @@ class Account:
     fees_paid_cents: int = 0
     rebates_earned_cents: int = 0
     volume: int = 0  # units traded, both sides
+    call_reserved_qty: int = 0  # size of this player's live answer to a call, either side
+    penalties_cents: int = 0
 
     def worst_case_long(self) -> int:
-        return self.position + self.open_buy_qty
+        return self.position + self.open_buy_qty + self.call_reserved_qty
 
     def worst_case_short(self) -> int:
-        return self.position - self.open_sell_qty
+        return self.position - self.open_sell_qty - self.call_reserved_qty
 
 
 @dataclass(frozen=True, slots=True)

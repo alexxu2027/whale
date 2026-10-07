@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .types import CancelReason, MarketStatus, OrderType, RejectReason, Side
+from .types import CallOutcome, CancelReason, MarketStatus, OrderType, RejectReason, Side, TradeKind
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -36,6 +36,7 @@ class OrderRejected(Event):
     reason: RejectReason
     order_id: int | None = None
     client_order_id: str | None = None
+    call_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -59,16 +60,25 @@ class OrderCancelled(Event):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Trade(Event):
+    """One fill. Who was maker and taker depends on ``kind``:
+
+    - BOOK: the resting order's owner is maker, the incoming order's is taker.
+    - CALL: the called player is maker, the caller is taker. No order ids.
+    - AUCTION: no maker or taker, no aggressor, no fees.
+    """
+
     trade_id: int
+    kind: TradeKind
     price: int
     qty: int
     buyer_id: str
     seller_id: str
-    maker_id: str
-    taker_id: str
-    maker_order_id: int
-    taker_order_id: int
-    aggressor_side: Side
+    maker_id: str | None
+    taker_id: str | None
+    aggressor_side: Side | None
+    buy_order_id: int | None = None
+    sell_order_id: int | None = None
+    call_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -76,6 +86,33 @@ class QuoteUpdated(Event):
     player_id: str
     bid_order_id: int | None
     ask_order_id: int | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CallStarted(Event):
+    call_id: int
+    caller_id: str
+    responder_id: str
+    answer_by: int  # ts deadline
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CallAnswered(Event):
+    call_id: int
+    responder_id: str
+    bid_price: int
+    ask_price: int
+    qty: int
+    automatic: bool  # the responder didn't answer; the engine quoted for them
+    penalty_cents: int
+    decide_by: int  # ts deadline
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CallEnded(Event):
+    call_id: int
+    outcome: CallOutcome
+    trade_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
