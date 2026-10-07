@@ -454,14 +454,15 @@ A clue is a **true statement about the hidden state**. Clue types:
 | Exact component | `C = +4` | Strong |
 | Component range | `B is between 1 and 5` | Medium |
 | Component sign | `A is not negative` | Weak to medium |
-| Comparison | `A is bigger than D` | Weak |
+| Comparison | `A is at least as high as D` | ~0 on its own (symmetric); useful combined with other clues |
 | Sum range | `A + D is between 2 and 6` | Medium |
 | Total bound | `The final value is greater than 105` | Varies widely |
 | Rumor | `B is positive (70% reliable)` | Weak, and may be false |
 
 Rules:
 
-- Clues are generated *after* sampling the state, from statements that are true for that state. Rumors are true with exactly their stated probability.
+- Every clue is the answer to a **question chosen without looking at the hidden state** ("What is Demand?", "Is the hammer price at least 105?"). Each question has a fixed set of possible answers and a known probability of each answer in every state: truthful questions give the answer containing the true state; rumors give the true answer with their stated probability and the opposite answer otherwise.
+- Because the choice of question carries no information and the answer process is fully specified, the posterior after a clue is exactly prior × P(answer | state). Picking clues by peeking at the state (for example, "choose a true statement that sounds interesting") would leak information and is not allowed.
 - In the default recipe, each player's clue concerns different components where possible, so pooling everyone's information approximately reveals the value. The market can discover the answer only if people trade on what they know.
 - Clue text is generated from templates and stored with a machine-readable form (a predicate over the state), so the server can compute with it.
 

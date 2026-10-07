@@ -3,7 +3,9 @@ name = "whale-backend"
 version = "0.1.0"
 description = "Whale game server: matching engine, game logic, multiplayer"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.3",
+]
 
 [build-system]
 requires = ["hatchling"]
