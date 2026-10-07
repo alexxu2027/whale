@@ -12,11 +12,10 @@ from enum import StrEnum
 @dataclass(frozen=True, slots=True)
 class Personality:
     name: str
-    latency_ms: tuple[int, int]  # time between actions, uniform in range
+    latency_ms: tuple[int, int]  # pause after acting before deciding again, uniform in range
     # Quoting ("Your Market"); quote_size 0 means the bot doesn't make markets.
     quote_size: int
-    base_half_width: float  # points
-    k_sigma: float  # extra half-width per point of belief sd
+    base_half_width: float  # minimum distance (points) from fair value to each side of the quote
     inventory_skew: float  # gamma: points the center moves per unit held
     # Taking liquidity
     take_edge: float  # minimum expected edge (points) to take an offer
@@ -30,14 +29,17 @@ class Personality:
     noise_rate: float = 0.0  # chance per action of a random trade
     fv_noise: float = 0.0  # sd of noise added to the bot's own fair value
     bluff_rate: float = 0.0  # chance per action of trading against its view
+    # Reaction time: commands reach the exchange this long after the bot
+    # looked at the market (PRD §19.1). The floor is what keeps bots from
+    # sniping humans with machine speed.
+    think_ms: tuple[int, int] = (400, 700)
 
 
 MARKET_MAKER = Personality(
     name="Market Maker",
     latency_ms=(300, 900),
     quote_size=5,
-    base_half_width=1.0,
-    k_sigma=0.15,
+    base_half_width=0.5,
     inventory_skew=0.15,
     take_edge=2.5,
     take_size=5,
@@ -49,8 +51,7 @@ CONSERVATIVE = Personality(
     name="Conservative",
     latency_ms=(900, 2_000),
     quote_size=3,
-    base_half_width=2.5,
-    k_sigma=0.3,
+    base_half_width=2.0,
     inventory_skew=0.3,
     take_edge=4.0,
     take_size=3,
@@ -62,8 +63,7 @@ WHALE = Personality(
     name="Whale",
     latency_ms=(600, 1_500),
     quote_size=10,
-    base_half_width=1.5,
-    k_sigma=0.2,
+    base_half_width=1.0,
     inventory_skew=0.05,
     take_edge=1.0,
     take_size=10,
@@ -76,7 +76,6 @@ SHARK = Personality(
     latency_ms=(400, 1_000),
     quote_size=0,
     base_half_width=0.0,
-    k_sigma=0.0,
     inventory_skew=0.1,
     take_edge=1.5,
     take_size=8,
@@ -89,7 +88,6 @@ NOISE = Personality(
     latency_ms=(500, 1_500),
     quote_size=4,
     base_half_width=1.5,
-    k_sigma=0.0,
     inventory_skew=0.05,
     take_edge=0.5,
     take_size=4,
@@ -104,8 +102,7 @@ BLUFFER = Personality(
     name="Bluffer",
     latency_ms=(400, 1_000),
     quote_size=5,
-    base_half_width=1.2,
-    k_sigma=0.15,
+    base_half_width=0.75,
     inventory_skew=0.1,
     take_edge=2.0,
     take_size=5,
@@ -115,6 +112,9 @@ BLUFFER = Personality(
 )
 
 ALL = (MARKET_MAKER, CONSERVATIVE, WHALE, SHARK, NOISE, BLUFFER)
+
+
+MIN_THINK_MS = 300  # no bot, at any difficulty, reacts faster than this
 
 
 class Difficulty(StrEnum):
@@ -132,10 +132,15 @@ def with_difficulty(p: Personality, d: Difficulty) -> Personality:
             return replace(
                 p,
                 latency_ms=(lo * 2, hi * 2),
+                think_ms=(700, 1_200),
                 learns_from_flow=False,
                 fv_noise=max(p.fv_noise, 3.0),
             )
         case Difficulty.HARD:
-            return replace(p, latency_ms=(max(200, lo * 2 // 3), max(300, hi * 2 // 3)))
+            return replace(
+                p,
+                latency_ms=(max(200, lo * 2 // 3), max(300, hi * 2 // 3)),
+                think_ms=(MIN_THINK_MS, 500),
+            )
         case _:
             return p

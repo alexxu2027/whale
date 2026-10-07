@@ -32,6 +32,7 @@ the lowest price they have sold at, and their most recent call answer.
 from __future__ import annotations
 
 import functools
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,6 +42,18 @@ from whale.game.posterior import StateSpace, belief, state_space
 from whale.game.questions import Answer, ExactQ, Question
 from whale.game.recipes import Recipe
 from whale.game.setup import Dealing
+
+
+# Posterior means are floats; 102.00000000000003 must round to the 102 tick.
+TICK_EPS = 1e-9
+
+
+def tick_up(x: float) -> int:
+    return math.ceil(x - TICK_EPS)
+
+
+def tick_down(x: float) -> int:
+    return math.floor(x + TICK_EPS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,26 +124,32 @@ class BeliefTracker:
         self._max_buy: dict[str, int] = {}
         self._min_sell: dict[str, int] = {}
         self._answers: dict[str, tuple[int, int]] = {}
+        self._invalidate()
+
+    def _invalidate(self) -> None:
+        self._w: np.ndarray | None = None
         self._cached: tuple[float, float] | None = None
+        self._wv: np.ndarray | None = None
+        self._if_taken: dict[tuple[int, bool], float] = {}
 
     def observe_take(self, trader: str, bought: bool, price: int) -> None:
         if not self._learns:
             return
         if bought and price > self._max_buy.get(trader, -1):
             self._max_buy[trader] = price
-            self._cached = None
+            self._invalidate()
         elif not bought and price < self._min_sell.get(trader, 10**9):
             self._min_sell[trader] = price
-            self._cached = None
+            self._invalidate()
 
     def observe_answer(self, responder: str, bid: int, ask: int) -> None:
         if self._learns and self._answers.get(responder) != (bid, ask):
             self._answers[responder] = (bid, ask)
-            self._cached = None
+            self._invalidate()
 
-    def fair_value(self) -> tuple[float, float]:
-        """(mean, sd) of the final value under the current belief."""
-        if self._cached is None:
+    def _weights(self) -> np.ndarray:
+        """Normalized posterior weights over the state space."""
+        if self._w is None:
             w = self._base.copy()
             noise = (1 - self._pi) / 2
             for p in self._max_buy.values():
@@ -142,12 +161,61 @@ class BeliefTracker:
             total = w.sum()
             if total <= 0:  # contradictory evidence: fall back to the bot's own clue
                 w, total = self._base, self._base.sum()
-            w = w / total
+            self._w = w / total
+        return self._w
+
+    def fair_value(self) -> tuple[float, float]:
+        """(mean, sd) of the final value under the current belief."""
+        if self._cached is None:
+            w = self._weights()
             v = self.space.values
             mean = float(w @ v)
             sd = float(np.sqrt(max(0.0, w @ (v * v) - mean * mean)))
             self._cached = (mean, sd)
         return self._cached
+
+    def value_if_taken(self, price: int, buy: bool) -> float:
+        """``E[V | an unknown player takes my quote at price]``.
+
+        With ``buy=True``: given that someone buys from me there (lifts my
+        ask); with ``buy=False``: given that someone sells to me (hits my
+        bid). The taker is treated as a player we know nothing about yet,
+        which is the worst case for the quoter. A bot that doesn't model
+        informed traders gets its plain fair value.
+        """
+        if not self._learns:
+            return self.fair_value()[0]
+        key = (price, buy)
+        cached = self._if_taken.get(key)
+        if cached is None:
+            w = self._weights()
+            if self._wv is None:
+                self._wv = w * self.space.values
+            row = self._flow.row(price, buy=buy)
+            c = (1 - self._pi) / 2
+            num = self._pi * float(row @ self._wv) + c * float(self._wv.sum())
+            den = self._pi * float(row @ w) + c
+            cached = self._if_taken[key] = num / den
+        return cached
+
+    def regret_free_quote(self) -> tuple[int, int]:
+        """The tightest (bid, ask) that loses nothing in expectation if hit.
+
+        Glosten-Milgrom: the ask must be at least the expected value *given
+        that someone buys there*, and the bid at most the expected value given
+        that someone sells there. Scans outward from fair value on the integer
+        tick grid and returns the first price on each side that qualifies.
+        """
+        lo = self._flow.price_min
+        hi = lo + self._flow.above.shape[0] - 1
+        fv = self.fair_value()[0]
+        ask = min(max(tick_up(fv), lo), hi)
+        while ask < hi and ask < self.value_if_taken(ask, buy=True) - TICK_EPS:
+            ask += 1
+        bid = min(max(tick_down(fv), lo), hi)
+        while bid > lo and bid > self.value_if_taken(bid, buy=False) + TICK_EPS:
+            bid -= 1
+        return bid, ask
 
     def informed_traders(self) -> int:
         """How many other players have revealed something so far."""

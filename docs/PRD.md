@@ -1244,7 +1244,7 @@ Solo mode depends entirely on bots, so bot quality is a core feature, not a fill
 
 - Bots are **ordinary clients** of the engine. They connect through the same protocol (§29), receive the same filtered information as a human in their seat, and have no privileged access to hidden state.
 - Bots receive clues from the same generator as humans.
-- Bots have a minimum **reaction latency** (default 400 ms, varied by personality and difficulty) so they cannot snipe humans with machine speed. Bots compete on reasoning, not reflexes.
+- Bots have a minimum **think time** (400–700 ms by default, never below 300 ms at any difficulty). A bot's commands reach the exchange that long after the moment it looked at the market, as in ABIDES's computation-delay model, so no bot can react to anything faster than its think time. Bots compete on reasoning, not reflexes.
 
 ### 19.2 Bot Reasoning Core
 
@@ -1258,12 +1258,14 @@ P(buy at p | state) ∝ π · P(trader's FV > p | state) + (1 − π) · ½
 
 where `P(trader's FV > p | state)` is estimated from the clue types the trader could have received.
 
-**Quoting.** The bot centers its market on fair value and leans it against inventory, then sets its gap from uncertainty and the risk of informed flow. This is inspired by Avellaneda-Stoikov:
+**Quoting.** Quotes follow Glosten–Milgrom: the ask is the lowest price at or above fair value where `ask ≥ E[V | an unknown player buys at the ask]`, and the bid the highest where `bid ≤ E[V | an unknown player sells at the bid]`. Both are computed exactly from the bot's belief, so a flat bot never posts a price it expects to regret, and its spread widens automatically when it believes others are better informed. On top of that:
 
 ```text
-center     = FV − γ · position
-half_width = base + k · σ_posterior + adverse_selection_premium
+bid = min(regret-free bid, FV − margin) − γ · position
+ask = max(regret-free ask, FV + margin) − γ · position
 ```
+
+The inventory lean (γ, after Avellaneda–Stoikov) lets a bot give up its adverse-selection premium to shed inventory, but never quote the unloading side past its own fair value.
 
 **Taking.** The bot takes an offer when its edge versus fair value is above a threshold and its position limit allows.
 

@@ -10,12 +10,21 @@ Each action, in priority order:
 2. Maybe trade randomly (noise) or against its own view (bluff).
 3. Otherwise take an offer if its edge beats ``take_edge``.
 4. Maybe call another player.
-5. Re-quote its market around fair value, leaning against inventory.
+5. Re-quote its market (see ``quote_prices``).
+
+Quotes follow Glosten-Milgrom: each side is no better than the bot's
+expected value *given that someone trades with it there*, so the bot never
+quotes a price it expects to regret. On top of that sits a personal margin,
+and an Avellaneda-Stoikov-style inventory lean that shifts both sides
+against the bot's position. The lean is the one deliberate exception to
+"no regret": to shed inventory, a bot will give up its adverse-selection
+premium on the unloading side, but never quote that side past its own fair
+value (a long bot never offers below fair value, a short one never bids
+above it).
 """
 
 from __future__ import annotations
 
-import math
 import random
 
 from whale.engine import (
@@ -39,7 +48,7 @@ from whale.game.dealing import Clue
 from whale.game.recipes import Recipe
 from whale.game.setup import Dealing
 
-from .beliefs import BeliefTracker
+from .beliefs import BeliefTracker, tick_down, tick_up
 from .personalities import Personality
 from .view import MarketView
 
@@ -96,20 +105,23 @@ class Bot:
     def next_delay(self) -> int:
         return self.rng.randint(*self.p.latency_ms)
 
+    def think_time(self) -> int:
+        return self.rng.randint(*self.p.think_ms)
+
     # -- decisions -----------------------------------------------------------
 
     def act(self, view: MarketView) -> list[Command]:
-        fv, sd = self.fair_value()
+        fv, _ = self.fair_value()
         center = fv - self.p.inventory_skew * view.position
 
         if view.status is MarketStatus.PRE_OPEN:
-            q = self._quote(view, center, sd)
+            q = self._quote(view)
             return [q] if q else []
         if view.status is not MarketStatus.OPEN:
             return []
 
         if view.my_call is not None:
-            c = self._handle_call(view, center, sd)
+            c = self._handle_call(view, center)
             return [c] if c else []
 
         cmds: list[Command] = []
@@ -133,7 +145,7 @@ class Bot:
         # The view predates this action's trade, so re-quote on the next
         # action instead of quoting from a stale position.
         if not trade:
-            q = self._quote(view, center, sd)
+            q = self._quote(view)
             if q:
                 cmds.append(q)
         return cmds
@@ -181,15 +193,26 @@ class Bot:
             order_type=OrderType.IOC,
         )
 
-    def _quote(self, view: MarketView, center: float, sd: float) -> SetQuote | None:
+    def quote_prices(self, position: int) -> tuple[int, int]:
+        """(bid, ask): regret-free bounds, widened to the personal margin,
+        then leaned against inventory."""
+        fv, _ = self.fair_value()
+        gm_bid, gm_ask = self.tracker.regret_free_quote()
+        margin = self.p.base_half_width
+        lean = self.p.inventory_skew * position
+        bid = tick_down(min(gm_bid + self._bias, fv - margin) - lean)
+        ask = tick_up(max(gm_ask + self._bias, fv + margin) - lean)
+        if position > 0:
+            ask = max(ask, tick_up(fv))
+        elif position < 0:
+            bid = min(bid, tick_down(fv))
+        return bid, max(ask, bid + 1)
+
+    def _quote(self, view: MarketView) -> SetQuote | None:
         p = self.p
         if not p.quote_size:
             return None
-        half = p.base_half_width + p.k_sigma * sd
-        bid = math.floor(center - half)
-        ask = math.ceil(center + half)
-        if ask <= bid:
-            ask = bid + 1
+        bid, ask = self.quote_prices(view.position)
         bid = min(max(bid, view.price_min), view.price_max - 1)
         ask = min(max(ask, bid + 1), view.price_max)
 
@@ -226,14 +249,17 @@ class Bot:
             return False
         return self._last_call_ts is None or view.now >= self._last_call_ts + view.call_cooldown_ms
 
-    def _handle_call(self, view: MarketView, center: float, sd: float) -> Command | None:
+    def _handle_call(self, view: MarketView, center: float) -> Command | None:
         call = view.my_call
         assert call is not None
         if call.is_responder and call.stage is CallStage.AWAITING_ANSWER:
-            # Quote a little wider to a caller who has already been taking.
-            half = self.p.base_half_width + self.p.k_sigma * sd + 0.5
-            width = max(1, min(view.call_max_width, round(2 * half)))
-            bid = round(center - width / 2)
+            bid, ask = self.quote_prices(view.position)
+            if ask - bid > view.call_max_width:
+                # The rules cap the width, so tighten around the middle and
+                # accept some expected regret. That's the pressure of a call.
+                bid = round((bid + ask - view.call_max_width) / 2)
+                ask = bid + view.call_max_width
+            width = ask - bid
             bid = min(max(bid, view.price_min), view.price_max - width)
             return AnswerCall(
                 player_id=self.player_id,

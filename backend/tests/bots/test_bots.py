@@ -189,3 +189,91 @@ def test_hard_bots_beat_easy_bots() -> None:
         for name, ps in simulate_round(seats, seed).players.items():
             (hard if name.startswith("hard") else easy).append(ps.pnl)
     assert statistics.fmean(hard) > statistics.fmean(easy)
+
+
+# -- Glosten-Milgrom quoting -------------------------------------------------------
+
+
+def test_regret_free_quote_matches_brute_force() -> None:
+    """The ask is the first price at or above fair value where p >= E[V | a
+    new player buys at p], recomputed from scratch for each candidate."""
+    for card, evidence in ((0, []), (3, [("sam", True, 104)]), (-2, [("maya", False, 96), ("sam", True, 101)])):
+        t = tracker(card=card)
+        for trader, bought, price in evidence:
+            t.observe_take(trader, bought, price)
+        fv = t.fair_value()[0]
+
+        def after(bought: bool, price: int) -> float:
+            fresh = tracker(card=card)
+            for e in evidence:
+                fresh.observe_take(*e)
+            fresh.observe_take("__new__", bought, price)
+            return fresh.fair_value()[0]
+
+        ask = next(p for p in range(int(np.ceil(fv)), 121) if p >= after(True, p))
+        bid = next(p for p in range(int(np.floor(fv)), 79, -1) if p <= after(False, p))
+        assert t.regret_free_quote() == (bid, ask)
+        assert bid < fv < ask  # informed traders force a spread around fair value
+
+
+def test_uninformed_quoter_has_no_adverse_selection_premium() -> None:
+    t = tracker(card=2, pi=0.0)
+    assert t.regret_free_quote() == (102, 102)
+
+
+def bot_with_card(card: int) -> Bot:
+    clue = simulate_round(INFORMED, seed=0).result.players[0].clue  # any clue object
+    answer = Answer(ExactQ(0), card + 5)
+    clue = type(clue)(answer=answer, flavor="", precise="", strength=0.25)
+    import random
+
+    return Bot("bot", MARKET_MAKER, clue, FOUR_CARDS, Dealing.ONE_CARD_EACH, random.Random(0))
+
+
+def test_flat_bot_quotes_are_regret_free() -> None:
+    b = bot_with_card(1)
+    b.tracker.observe_take("sam", True, 103)
+    bid, ask = b.quote_prices(0)
+    assert ask >= b.tracker.value_if_taken(ask, buy=True)
+    assert bid <= b.tracker.value_if_taken(bid, buy=False)
+
+
+def test_inventory_lean_never_crosses_fair_value() -> None:
+    b = bot_with_card(1)
+    fv = b.fair_value()[0]
+    long_bid, long_ask = b.quote_prices(20)
+    short_bid, short_ask = b.quote_prices(-20)
+    assert long_ask >= np.ceil(fv) and long_bid < b.quote_prices(0)[0]  # leans down, offers no lower than FV
+    assert short_bid <= np.floor(fv) and short_ask > b.quote_prices(0)[1]
+
+
+# -- reaction time -----------------------------------------------------------------
+
+
+def test_bots_never_react_faster_than_the_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every command reaches the exchange at least MIN_THINK_MS after the
+    newest event its bot had seen when deciding (PRD §19.1)."""
+    from whale.bots.personalities import MIN_THINK_MS
+    from whale.game.round import Round
+
+    seen: dict[str, int] = {}
+    observe, submit = Bot.observe, Round.submit
+
+    def spy_observe(self: Bot, e) -> None:
+        seen[self.player_id] = max(seen.get(self.player_id, -(10**9)), e.ts)
+        observe(self, e)
+
+    gaps: list[int] = []
+
+    def spy_submit(self: Round, cmd):
+        if cmd.player_id in seen:
+            gaps.append(cmd.ts - seen[cmd.player_id])
+        return submit(self, cmd)
+
+    monkeypatch.setattr(Bot, "observe", spy_observe)
+    monkeypatch.setattr(Round, "submit", spy_submit)
+    hard = [Seat(f"h{i}", with_difficulty(BY_NAME[n], Difficulty.HARD)) for i, n in enumerate(("Market Maker", "Shark", "Whale", "Bluffer"))]
+    for seed in range(8):
+        seen.clear()
+        simulate_round(hard, seed)
+    assert gaps and min(gaps) >= MIN_THINK_MS

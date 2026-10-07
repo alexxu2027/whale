@@ -1,9 +1,16 @@
 """Headless simulation: bots play full rounds with no networking (PRD §32.4).
 
-Discrete-event loop: each bot acts at its own scheduled times. Before acting,
-a bot receives every event it is allowed to see (``is_visible``) since its
-last action, plus a public view of the market. Its commands go through a
-real ``Round``, the same code path humans will use.
+Discrete-event loop. Each bot repeatedly:
+
+1. **decides** at time t: it receives every event it may see
+   (``is_visible``) since its last decision, plus a public view of the
+   market as of t, and returns commands;
+2. those commands **arrive** at the exchange at t + think time, stamped
+   with the arrival time (like ABIDES's computation delay), so a bot never
+   reacts to anything faster than its think time;
+3. it decides again a little after its commands have arrived.
+
+Commands go through a real ``Round``, the same code path humans will use.
 
     uv run python -m whale.sim.harness --rounds 500
 """
@@ -12,13 +19,14 @@ from __future__ import annotations
 
 import argparse
 import heapq
+import itertools
 import math
 import random
 import statistics
 import time
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from whale.bots.bot import Bot
 from whale.bots.personalities import ALL, Difficulty, Personality, with_difficulty
@@ -79,22 +87,31 @@ def simulate_round(
     stats = {n: PlayerStats() for n in names}
     cursors = [0] * len(bots)
 
-    queue = [(rng.randint(0, 2_000), i) for i in range(len(bots))]
+    # Heap entries: (time, kind, tiebreak, bot index, commands). At equal
+    # times, arrivals (kind 0) are processed before decisions (kind 1).
+    counter = itertools.count()
+    queue: list[tuple[int, int, int, int, list]] = [
+        (rng.randint(0, 2_000), 1, next(counter), i, []) for i in range(len(bots))
+    ]
     heapq.heapify(queue)
     while queue:
-        t, i = heapq.heappop(queue)
+        t, kind, _, i, cmds = heapq.heappop(queue)
         if t >= rnd.close_at:
             break
         rnd.advance(t)
         bot = bots[i]
+        if kind == 0:
+            for cmd in cmds:
+                stats[bot.player_id].commands += 1
+                rnd.submit(replace(cmd, ts=t))
+            heapq.heappush(queue, (t + bot.next_delay(), 1, next(counter), i, []))
+            continue
         for e in rnd.log[cursors[i] :]:
             if is_visible(e, bot.player_id):
                 bot.observe(e)
-        for cmd in bot.act(build_view(rnd.exchange, bot.player_id, t)):
-            stats[bot.player_id].commands += 1
-            rnd.submit(cmd)
         cursors[i] = len(rnd.log)
-        heapq.heappush(queue, (t + bot.next_delay(), i))
+        decided = bot.act(build_view(rnd.exchange, bot.player_id, t))
+        heapq.heappush(queue, (t + bot.think_time(), 0, next(counter), i, decided))
 
     bid, ask = rnd.exchange.book.best_price(Side.BUY), rnd.exchange.book.best_price(Side.SELL)
     rnd.advance(rnd.close_at)
