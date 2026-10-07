@@ -12,6 +12,7 @@ Multiplayer market-making party game. The source of truth for product decisions 
 
 - `uv run pytest`: all tests, including the Hypothesis stateful engine tests
 - `uv run python bench/bench_engine.py`: engine throughput benchmark
+- `uv run python -m whale.sim.harness --rounds 300 [--table "Market Maker,Shark,..."]`: headless bot-vs-bot rounds with balance stats
 
 Backend code lives in the `whale` package (`backend/whale/`), so PRD §27's `engine/` is `whale/engine/`.
 

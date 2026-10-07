@@ -1,0 +1,154 @@
+"""Bot beliefs: exact posterior from the bot's clue, updated on order flow (PRD §19.2).
+
+A bot starts from ``prior * L[own answer]``. When another player *takes*
+liquidity (an aggressive buy or sell, or the decision on a call), that is
+evidence about the taker's private information. The bot models the taker as
+a level-1 trader, simplified from Glosten-Milgrom: with probability ``pi``
+they are informed and buy only if their fair value exceeds the price; with
+probability ``1 - pi`` they trade for reasons unrelated to value (half buys,
+half sells). So a buy at ``p`` multiplies the belief by::
+
+    pi * P(trader's FV > p | state) + (1 - pi) / 2
+
+``P(trader's FV > p | state)`` is exact: it averages over every clue the
+trader could have been dealt (given how clues are dealt and which clue the
+bot itself holds) and over the answer each state would produce.
+
+Answering a call leaks information too: a responder quoting ``bid / ask``
+probably has a fair value inside that range. That is weighted the same way::
+
+    pi * P(responder's FV in [bid, ask] | state) + (1 - pi) / 2
+
+The constant second term stands for a quote unrelated to value, as with
+trades. If the range can't contain any fair value the responder could have
+(say they leaned hard on inventory), the factor is the same for every state
+and the belief doesn't move.
+
+To avoid counting a burst of trades as many independent signals, each
+trader's evidence is summarized by the highest price they have bought at,
+the lowest price they have sold at, and their most recent call answer.
+"""
+
+from __future__ import annotations
+
+import functools
+from dataclasses import dataclass
+
+import numpy as np
+
+from whale.game.dealing import question_catalog
+from whale.game.posterior import StateSpace, belief, state_space
+from whale.game.questions import Answer, ExactQ, Question
+from whale.game.recipes import Recipe
+from whale.game.setup import Dealing
+
+
+@dataclass(frozen=True, slots=True)
+class FlowModel:
+    """``above[i, s] = P(another player's FV > price_i | state s)``, likewise ``below``.
+
+    Ties (FV exactly equal to the price) count half, since an informed trader
+    is indifferent there.
+    """
+
+    price_min: int
+    above: np.ndarray  # (n_prices, N)
+    below: np.ndarray
+
+    def row(self, price: int, buy: bool) -> np.ndarray:
+        table = self.above if buy else self.below
+        return table[price - self.price_min]
+
+    def within(self, lo: int, hi: int) -> np.ndarray:
+        """P(another player's FV is in [lo, hi] | state); ties at the ends count half."""
+        inside = 1.0 - self.below[lo - self.price_min] - self.above[hi - self.price_min]
+        return np.clip(inside, 0.0, 1.0)
+
+
+def _other_player_questions(recipe: Recipe, dealing: Dealing, own: Question) -> list[Question]:
+    """The clues another player might hold, each equally likely."""
+    if dealing is Dealing.ONE_CARD_EACH:
+        assert isinstance(own, ExactQ)
+        return [ExactQ(i) for i in range(len(recipe.components)) if i != own.i]
+    lo, hi = 0.15, 0.40  # mirrors choose_balanced's default range
+    return [rq.question for rq in question_catalog(recipe) if lo <= rq.strength <= hi]
+
+
+@functools.cache
+def flow_model(recipe: Recipe, dealing: Dealing, own: Question) -> FlowModel:
+    space = state_space(recipe)
+    prices = np.arange(recipe.min_value, recipe.max_value + 1)
+    above = np.zeros((len(prices), space.size))
+    below = np.zeros((len(prices), space.size))
+    questions = _other_player_questions(recipe, dealing, own)
+    for q in questions:
+        L = space.likelihoods(q)  # (n_answers, N)
+        fv = np.array([belief(space, [Answer(q, a)]).mean for a in range(L.shape[0])])
+        eq = np.isclose(fv[None, :], prices[:, None])
+        gt = ((fv[None, :] > prices[:, None]) & ~eq) + 0.5 * eq
+        lt = ((fv[None, :] < prices[:, None]) & ~eq) + 0.5 * eq
+        above += gt @ L
+        below += lt @ L
+    above /= len(questions)
+    below /= len(questions)
+    return FlowModel(price_min=recipe.min_value, above=above, below=below)
+
+
+class BeliefTracker:
+    def __init__(
+        self,
+        recipe: Recipe,
+        dealing: Dealing,
+        own_answer: Answer,
+        informed_pct: float,
+        learns_from_flow: bool = True,
+    ) -> None:
+        self.space: StateSpace = state_space(recipe)
+        self._base = self.space.prior * own_answer.likelihood(self.space)
+        self._flow = flow_model(recipe, dealing, own_answer.question)
+        self._pi = informed_pct
+        self._learns = learns_from_flow and informed_pct > 0
+        self._max_buy: dict[str, int] = {}
+        self._min_sell: dict[str, int] = {}
+        self._answers: dict[str, tuple[int, int]] = {}
+        self._cached: tuple[float, float] | None = None
+
+    def observe_take(self, trader: str, bought: bool, price: int) -> None:
+        if not self._learns:
+            return
+        if bought and price > self._max_buy.get(trader, -1):
+            self._max_buy[trader] = price
+            self._cached = None
+        elif not bought and price < self._min_sell.get(trader, 10**9):
+            self._min_sell[trader] = price
+            self._cached = None
+
+    def observe_answer(self, responder: str, bid: int, ask: int) -> None:
+        if self._learns and self._answers.get(responder) != (bid, ask):
+            self._answers[responder] = (bid, ask)
+            self._cached = None
+
+    def fair_value(self) -> tuple[float, float]:
+        """(mean, sd) of the final value under the current belief."""
+        if self._cached is None:
+            w = self._base.copy()
+            noise = (1 - self._pi) / 2
+            for p in self._max_buy.values():
+                w *= self._pi * self._flow.row(p, buy=True) + noise
+            for p in self._min_sell.values():
+                w *= self._pi * self._flow.row(p, buy=False) + noise
+            for lo, hi in self._answers.values():
+                w *= self._pi * self._flow.within(lo, hi) + noise
+            total = w.sum()
+            if total <= 0:  # contradictory evidence: fall back to the bot's own clue
+                w, total = self._base, self._base.sum()
+            w = w / total
+            v = self.space.values
+            mean = float(w @ v)
+            sd = float(np.sqrt(max(0.0, w @ (v * v) - mean * mean)))
+            self._cached = (mean, sd)
+        return self._cached
+
+    def informed_traders(self) -> int:
+        """How many other players have revealed something so far."""
+        return len(self._max_buy.keys() | self._min_sell.keys() | self._answers.keys())
