@@ -14,6 +14,8 @@
 
 Whale is a fast, social market-making game where players quote prices, trade a fictional asset, react to incomplete information, bluff, manage inventory, and try to finish each round with the highest score.
 
+The setting is a **fantasy auction house**. Players are merchants on its chaotic trading floor, dealing in enchanted relics, monster eggs, rare spices, pirate maps, and cursed jewelry before each item goes to the Grand Auction. Every item has a hidden true worth, and every merchant has heard a different appraisal or rumor (§7.6).
+
 The game should feel closer to a party game than a professional trading terminal on the surface, and hold up to scrutiny from a professional underneath.
 
 Players do not need finance knowledge. The interface hides market jargon, teaches mechanics through play, and makes the social dynamics as important as the math. Underneath, the game runs on an exact information model and a real exchange engine, and every round can be analyzed the way a trading desk analyzes a day.
@@ -490,6 +492,110 @@ These values are never sent to clients before the reveal (§31). After the revea
 - The clue generator targets a configured strength distribution per mode. For example, Insider mode gives every player a clue of strength 0.15 to 0.40, and One Insider mode gives one player 0.60 or more and everyone else 0.10 or less.
 - Strength is measured *ex ante*, averaged over states that could have produced that clue type, so a clue does not leak information by being "obviously strong this round."
 - Balancing is validated offline by the simulation harness (§32.4): across thousands of bot-played rounds, no seat or clue type should have a systematic advantage beyond what the mode intends.
+
+### 7.6 Theme: The Auction House
+
+The math in §7.1–7.5 stays abstract. The theme is a **skin over the recipe**: it renames components, rewrites clue text, and supplies art. It never changes the probabilities.
+
+#### Setting
+
+Players are merchants on the trading floor of a fantasy auction house. Each round, one item is up for trading before the **Grand Auction**. When the timer runs out, the item goes under the hammer, and its hammer price is the final value. Everyone settles their holdings at that price, in gold.
+
+#### Vocabulary
+
+| Market concept | In the game |
+|----------------|-------------|
+| Asset | The item (e.g. The Dragon's Eye) |
+| Final value | Hammer price at the Grand Auction |
+| Recipe range | "Rumored value: 80 to 120 gold" |
+| Private clue | Your appraisal or merchant's tip |
+| Buy offer / sell offer | "I will buy at" / "I will sell at" (unchanged) |
+| Position / inventory | Goods you are holding (Pro: position) |
+| Short position | Goods you have promised to deliver |
+| Cash | Gold |
+| Public information event | Royal decree, theft, discovery, scandal |
+| Insider (One Insider mode) | The merchant with a secret appraisal |
+| Settlement | The Grand Auction |
+
+#### Components Become Appraisal Factors
+
+In the Four Cards recipe, each component becomes a named factor of the item's worth:
+
+```text
+Hammer price = 100 + Authenticity + Rarity + Demand + Condition
+Each factor: -5 to +5 gold
+```
+
+Every item uses the same four factors, so players learn them once. Item-specific flavor lives in the clue text.
+
+#### Clue Text Is Flavor Plus a Precise Statement
+
+Every clue has two lines: an in-world line, and the exact statement it stands for. Flavor alone would be ambiguous, and the information model only works if every player can know exactly what their clue means.
+
+```text
+"The gem is definitely authentic."
+Authenticity is not negative.
+
+"The royal collector is not interested."
+Demand is 0 or lower.
+
+"My appraiser says the setting is flawless."
+Condition = +4
+```
+
+Party interface shows the precise line in smaller text beneath the flavor. Pro interface shows it prominently. Flavor text is chosen from per-item template pools so that a clue's wording never hints at its strength beyond what the precise statement says.
+
+#### Events Are Part of the Recipe
+
+A mid-round event like "A rival kingdom announces a bounty on dragon artifacts" must be either:
+
+- **a public clue** about existing factors (for example, "Demand is at least +2"), or
+- **a recipe component** whose distribution was public from the start (for example, "Royal Bounty: 30% chance of +10, revealed at minute 2").
+
+Either way, the event's outcome is sampled with the rest of the hidden state at round start. It is never invented mid-round, and it is never sent to clients before it fires (§31). This keeps fair values exact and events fair.
+
+#### Units
+
+A single gem can't be split into 15 units, so items are traded in one of two ways:
+
+- **Goods sold in quantity**, like monster eggs, sacks of saffron, or vials of potion. One unit is one item.
+- **Shares in a single treasure**, like The Dragon's Eye or a pirate map. The House sells shares in the item, and each share pays out the hammer price in gold at the Grand Auction. One share is one unit.
+
+The item card shows which applies.
+
+#### Item Catalog
+
+Each round draws an item from a catalog. An item defines its name, art, one-line description, unit style, and flavor pools for each factor. Items do not change the math, so the catalog can grow freely without rebalancing.
+
+Examples:
+
+| Item | Unit | Description |
+|------|------|-------------|
+| The Dragon's Eye | Share | A fist-sized ruby said to see through lies |
+| Basilisk Eggs | Egg | Handle with gloves. Do not make eye contact |
+| Saffron of Qarth | Sack | Worth more than gold, if it's real |
+| The Drowned Captain's Map | Share | Leads to treasure, or to the bottom of the sea |
+| Cursed Locket | Share | Beautiful. Previous owners unavailable for comment |
+
+#### Example Round
+
+```text
+THE DRAGON'S EYE
+Rumored value: 80 to 120 gold
+
+Your appraisal:  "The gem is definitely authentic."
+                 Authenticity is not negative.
+
+Secret objective: Finish holding at least 15 shares.
+
+Minute 2 — ROYAL DECREE
+"A rival kingdom announces a bounty on dragon artifacts."
+Demand is at least +2.
+```
+
+#### Theme and Name
+
+"Whale" still fits: in the auction house, a whale is a merchant who buys big. Awards and objectives keep their current names where they read naturally in-world.
 
 ---
 
@@ -1949,6 +2055,8 @@ Desired aesthetic:
 - clean
 - slightly chaotic during events
 - readable under time pressure
+
+Setting: a lively fantasy auction house (§7.6). Item cards, gold coins, a hammer-drop settlement moment, and a bustling trading floor give the reveal its drama.
 
 Possible references in spirit:
 
