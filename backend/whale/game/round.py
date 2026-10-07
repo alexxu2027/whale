@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
+from whale.analytics.attribution import Attribution, attribute
 from whale.engine import (
     CENTS_PER_POINT,
     Command,
@@ -27,10 +28,13 @@ from whale.engine import (
     MarketConfig,
     MarketStatus,
     SetStatus,
+    Side,
     Tick,
+    Trade,
 )
 
 from .dealing import Clue
+from .objectives import Objective, ObjectiveContext, deal_objectives
 from .posterior import state_space
 from .recipes import Recipe
 from .setup import Dealing, RoundSetup, new_seed, setup_round
@@ -54,11 +58,23 @@ class RoundConfig:
 @dataclass(frozen=True, slots=True)
 class PlayerResult:
     player_id: str
-    rank: int  # 1 = best; ties share a rank
-    pnl_cents: int
+    rank: int  # 1 = best by score; ties share a rank
+    pnl_cents: int  # trading P&L, fees included
     position: int
     cash_cents: int
     clue: Clue
+    objective: Objective
+    objective_met: bool
+    attribution: Attribution
+
+    @property
+    def bonus_cents(self) -> int:
+        return self.objective.bonus * CENTS_PER_POINT if self.objective_met else 0
+
+    @property
+    def score_cents(self) -> int:
+        """Round score: trading P&L plus objective bonus (PRD §15)."""
+        return self.pnl_cents + self.bonus_cents
 
     @property
     def pnl(self) -> float:
@@ -87,8 +103,10 @@ class Round:
         self.seed = new_seed() if seed is None else seed
         root = random.Random(self.seed)
         setup_seed, exchange_seed = root.getrandbits(64), root.getrandbits(64)
+        objective_seed = root.getrandbits(64)
 
         self.setup: RoundSetup = setup_round(recipe, players, setup_seed, self.config.dealing)
+        self.objectives: dict[str, Objective] = deal_objectives(players, random.Random(objective_seed))
         market = replace(
             self.config.market,
             price_min=recipe.min_value,
@@ -101,6 +119,9 @@ class Round:
         self.close_at = self.open_at + self.config.trading_ms
         self.log: list[Event] = []
         self.result: RoundResult | None = None
+        # Middle of the book just before the command that produced each trade (PRD §17.2).
+        self.trade_mids: dict[int, float] = {}
+        self._last_trade_price: int | None = None
         self._now = start_ts
 
     @property
@@ -137,28 +158,53 @@ class Round:
         out = self.advance(command.ts)
         return out + self._apply(command)
 
+    def mid(self) -> float:
+        """Middle of the book; else the last trade price; else the reference price."""
+        bid = self.exchange.book.best_price(Side.BUY)
+        ask = self.exchange.book.best_price(Side.SELL)
+        if bid is not None and ask is not None and bid < ask:
+            return (bid + ask) / 2
+        if self._last_trade_price is not None:
+            return float(self._last_trade_price)
+        return float(self.exchange.config.reference)
+
     def _apply(self, command: Command) -> list[Event]:
+        mid = self.mid()
         events = self.exchange.apply(command)
+        for e in events:
+            if isinstance(e, Trade):
+                self.trade_mids[e.trade_id] = mid
+                self._last_trade_price = e.price
         self.log += events
         return events
 
     def _settle(self) -> RoundResult:
         v = self.setup.final_value
         settlements = self.exchange.settle(v)
-        ordered = sorted(settlements.values(), key=lambda s: (-s.pnl_cents, s.player_id))
-        players = []
-        for s in ordered:
-            rank = 1 + sum(1 for o in ordered if o.pnl_cents > s.pnl_cents)
-            players.append(
+        trades = [e for e in self.log if isinstance(e, Trade)]
+        attribution = attribute(trades, self.trade_mids, self.exchange.accounts, v)
+        positions = {p: s.position for p, s in settlements.items()}
+        unranked = []
+        for s in settlements.values():
+            objective = self.objectives[s.player_id]
+            ctx = ObjectiveContext(s.player_id, trades, positions, self.close_at)
+            unranked.append(
                 PlayerResult(
                     player_id=s.player_id,
-                    rank=rank,
+                    rank=0,
                     pnl_cents=s.pnl_cents,
                     position=s.position,
                     cash_cents=s.cash_cents,
                     clue=self.setup.clues[s.player_id],
+                    objective=objective,
+                    objective_met=objective.check(ctx),
+                    attribution=attribution[s.player_id],
                 )
             )
+        unranked.sort(key=lambda r: (-r.score_cents, r.player_id))
+        players = [
+            replace(r, rank=1 + sum(1 for o in unranked if o.score_cents > r.score_cents)) for r in unranked
+        ]
         return RoundResult(
             final_value=v,
             state=self.setup.state,

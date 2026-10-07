@@ -1,16 +1,7 @@
 """Headless simulation: bots play full rounds with no networking (PRD §32.4).
 
-Discrete-event loop. Each bot repeatedly:
-
-1. **decides** at time t: it receives every event it may see
-   (``is_visible``) since its last decision, plus a public view of the
-   market as of t, and returns commands;
-2. those commands **arrive** at the exchange at t + think time, stamped
-   with the arrival time (like ABIDES's computation delay), so a bot never
-   reacts to anything faster than its think time;
-3. it decides again a little after its commands have arrived.
-
-Commands go through a real ``Round``, the same code path humans will use.
+Bots are scheduled by ``BotRunner`` (decide, think, arrive), the same code
+live rooms use, and their commands go through a real ``Round``.
 
     uv run python -m whale.sim.harness --rounds 500
 """
@@ -18,24 +9,21 @@ Commands go through a real ``Round``, the same code path humans will use.
 from __future__ import annotations
 
 import argparse
-import heapq
-import itertools
 import math
 import random
 import statistics
 import time
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from whale.bots.bot import Bot
+from whale.bots.runner import BotRunner
 from whale.bots.personalities import ALL, Difficulty, Personality, with_difficulty
-from whale.bots.view import build_view
 from whale.engine import CENTS_PER_POINT, MarketConfig, OrderRejected, Side, Trade, TradeKind
 from whale.game.recipes import FOUR_CARDS, Recipe
 from whale.game.round import Round, RoundConfig, RoundResult
 from whale.game.setup import Dealing
-from whale.runtime.visibility import is_visible
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,33 +73,12 @@ def simulate_round(
         for s in seats
     ]
     stats = {n: PlayerStats() for n in names}
-    cursors = [0] * len(bots)
 
-    # Heap entries: (time, kind, tiebreak, bot index, commands). At equal
-    # times, arrivals (kind 0) are processed before decisions (kind 1).
-    counter = itertools.count()
-    queue: list[tuple[int, int, int, int, list]] = [
-        (rng.randint(0, 2_000), 1, next(counter), i, []) for i in range(len(bots))
-    ]
-    heapq.heapify(queue)
-    while queue:
-        t, kind, _, i, cmds = heapq.heappop(queue)
-        if t >= rnd.close_at:
-            break
-        rnd.advance(t)
-        bot = bots[i]
-        if kind == 0:
-            for cmd in cmds:
-                stats[bot.player_id].commands += 1
-                rnd.submit(replace(cmd, ts=t))
-            heapq.heappush(queue, (t + bot.next_delay(), 1, next(counter), i, []))
-            continue
-        for e in rnd.log[cursors[i] :]:
-            if is_visible(e, bot.player_id):
-                bot.observe(e)
-        cursors[i] = len(rnd.log)
-        decided = bot.act(build_view(rnd.exchange, bot.player_id, t))
-        heapq.heappush(queue, (t + bot.think_time(), 0, next(counter), i, decided))
+    def count(pid: str, _cmd: object) -> None:
+        stats[pid].commands += 1
+
+    runner = BotRunner(rnd, {b.player_id: b for b in bots}, rng, start=0, on_command=count)
+    runner.run_until(rnd.close_at - 1)
 
     bid, ask = rnd.exchange.book.best_price(Side.BUY), rnd.exchange.book.best_price(Side.SELL)
     rnd.advance(rnd.close_at)

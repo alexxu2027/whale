@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Lilita One", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+
+  --color-velvet-950: #120a1c;
+  --color-velvet-900: #1a1028;
+  --color-velvet-800: #251838;
+  --color-velvet-700: #34224d;
+  --color-velvet-600: #4a3369;
+  --color-velvet-400: #8f7ab0;
+  --color-velvet-200: #d9cdea;
+  --color-gold-300: #ffe08a;
+  --color-gold-400: #f5c542;
+  --color-gold-500: #e0a91f;
+  --color-buy-400: #3ddc97;
+  --color-buy-500: #22b877;
+  --color-sell-400: #ff6b6b;
+  --color-sell-500: #e5484d;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 50% -10%, #3a2357 0%, var(--color-velvet-900) 55%, var(--color-velvet-950) 100%);
+  background-color: var(--color-velvet-950);
+  background-attachment: fixed;
+  color: #f6f1ff;
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+@keyframes pop-in {
+  from { transform: scale(0.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.pop-in {
+  animation: pop-in 180ms ease-out;
+}
+
+@keyframes flash {
+  from { background-color: rgba(245, 197, 66, 0.35); }
+  to { background-color: transparent; }
+}
+.flash {
+  animation: flash 900ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pop-in, .flash { animation: none; }
+}

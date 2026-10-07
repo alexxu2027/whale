@@ -50,8 +50,10 @@ class MarketView:
 def build_view(ex: Exchange, player_id: str, now: int) -> MarketView:
     cfg = ex.config
     acct = ex.accounts[player_id]
-    (bid, bid_qty), = ex.book.depth(Side.BUY, 1) or [(None, 0)]
-    (ask, ask_qty), = ex.book.depth(Side.SELL, 1) or [(None, 0)]
+    # Opening markets are sealed until the open, for bots as for humans.
+    sealed = ex.status is MarketStatus.PRE_OPEN
+    (bid, bid_qty), = (not sealed and ex.book.depth(Side.BUY, 1)) or [(None, 0)]
+    (ask, ask_qty), = (not sealed and ex.book.depth(Side.SELL, 1)) or [(None, 0)]
 
     def side(order_id: int | None) -> tuple[int, int] | None:
         o = ex.book.get(order_id) if order_id is not None else None
