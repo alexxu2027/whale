@@ -26,7 +26,8 @@ Backend code lives in the `whale` package (`backend/whale/`), so PRD §27's `eng
 - **The server is authoritative.** Order validation, matching, and settlement happen server-side only.
 - **Never send to a client before the reveal:** the hidden final value, other players' clues, hidden objectives, server-computed fair values, or future events.
 - The matching engine is a pure, deterministic state machine (PRD §28): integer ticks, price-time priority (buys highest first, sells lowest first, ties by earliest sequence number), partial fills, cancels, IOC, post-only, self-trade prevention, and pre-trade position limits. Every outbound message goes through the visibility projection (PRD §31).
-- Default UI copy avoids finance jargon: "I will buy at" / "I will sell at", "Position", "Final Value", "Clue" (PRD §5.6, §13).
+- Default UI copy avoids finance jargon: "I will buy at" / "I will sell at", "Position", "Settlement Price", "Clue" (PRD §5.6, §13).
+- The theme is an open-outcry commodities pit (PRD §7.6, §36; research in `docs/design/pit-references.md`). The math stays abstract; theme only renames drivers, writes clue flavor, and supplies art.
 - Trading P&L stays the primary scoring driver. Objective and award bonuses must not overwhelm it.
 
 ## Build order

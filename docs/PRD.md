@@ -14,7 +14,7 @@
 
 Whale is a fast, social market-making game where players quote prices, trade a fictional asset, react to incomplete information, bluff, manage inventory, and try to finish each round with the highest score.
 
-The setting is a **fantasy auction house**. Players are merchants on its chaotic trading floor, dealing in enchanted relics, monster eggs, rare spices, pirate maps, and cursed jewelry before each item goes to the Grand Auction. Every item has a hidden true worth, and every merchant has heard a different appraisal or rumor (§7.6).
+The setting is an **open-outcry trading pit**. Players are floor traders in loud jackets, shouting bids and offers on commodity futures such as December Corn, Live Cattle, and Crude Oil until the closing bell. Every contract has a hidden settlement price, and every trader has heard something different from their desk, delivered by runner (§7.6, §7.7).
 
 The game should feel closer to a party game than a professional trading terminal on the surface, and hold up to scrutiny from a professional underneath.
 
@@ -225,7 +225,7 @@ Prefer:
 - Sell
 - Your Price
 - Your Position
-- Final Value
+- Settlement Price
 - Clue
 
 Avoid requiring users to understand terms like:
@@ -461,7 +461,7 @@ A clue is a **true statement about the hidden state**. Clue types:
 
 Rules:
 
-- Every clue is the answer to a **question chosen without looking at the hidden state** ("What is Demand?", "Is the hammer price at least 105?"). Each question has a fixed set of possible answers and a known probability of each answer in every state: truthful questions give the answer containing the true state; rumors give the true answer with their stated probability and the opposite answer otherwise.
+- Every clue is the answer to a **question chosen without looking at the hidden state** ("What is Export Demand?", "Is the settlement price at least 105?"). Each question has a fixed set of possible answers and a known probability of each answer in every state: truthful questions give the answer containing the true state; rumors give the true answer with their stated probability and the opposite answer otherwise.
 - Because the choice of question carries no information and the answer process is fully specified, the posterior after a clue is exactly prior × P(answer | state). Picking clues by peeking at the state (for example, "choose a true statement that sounds interesting") would leak information and is not allowed.
 - In the default recipe, each player's clue concerns different components where possible, so pooling everyone's information approximately reveals the value. The market can discover the answer only if people trade on what they know.
 - Clue text is generated from templates and stored with a machine-readable form (a predicate over the state), so the server can compute with it.
@@ -494,109 +494,146 @@ These values are never sent to clients before the reveal (§31). After the revea
 - Strength is measured *ex ante*, averaged over states that could have produced that clue type, so a clue does not leak information by being "obviously strong this round."
 - Balancing is validated offline by the simulation harness (§32.4): across thousands of bot-played rounds, no seat or clue type should have a systematic advantage beyond what the mode intends.
 
-### 7.6 Theme: The Auction House
+### 7.6 Theme: The Pit
 
-The math in §7.1–7.5 stays abstract. The theme is a **skin over the recipe**: it renames components, rewrites clue text, and supplies art. It never changes the probabilities.
+The math in §7.1–7.5 stays abstract. The theme is a **skin over the recipe**: it renames components, rewrites clue text, and supplies art. It never changes the probabilities. Research and sources for everything below: `docs/design/pit-references.md`.
 
 #### Setting
 
-Players are merchants on the trading floor of a fantasy auction house. Each round, one item is up for trading before the **Grand Auction**. When the timer runs out, the item goes under the hammer, and its hammer price is the final value. Everyone settles their holdings at that price, in gold.
+Players are floor traders in an **open-outcry futures pit**, modeled on the Chicago grain and livestock pits of the 1970s to 1990s. Hundreds of traders in loud jackets stand on tiered steps around an octagonal ring, shouting bids and offers and trading with anyone across the pit. Figgie, which Jane Street uses to teach trading, was designed to simulate this kind of market.
+
+Each round is one **contract**, such as December Corn or Live Cattle, traded for a few minutes until the closing bell. At the bell the contract settles at its **settlement price**, which is the round's final value, and every position settles at that price.
 
 #### Vocabulary
 
 | Market concept | In the game |
 |----------------|-------------|
-| Asset | The item (e.g. The Dragon's Eye) |
-| Final value | Hammer price at the Grand Auction |
-| Recipe range | "Rumored value: 80 to 120 gold" |
-| Private clue | Your appraisal or merchant's tip |
-| Buy offer / sell offer | "I will buy at" / "I will sell at" (unchanged) |
-| Position / inventory | Goods you are holding (Pro: position) |
-| Short position | Goods you have promised to deliver |
-| Cash | Gold |
-| Public information event | Royal decree, theft, discovery, scandal |
-| Insider (One Insider mode) | The merchant with a secret appraisal |
-| Settlement | The Grand Auction |
+| Asset | The contract (e.g. December Corn) |
+| Final value | Settlement price at the closing bell |
+| Recipe range | "Settles between 80 and 120" |
+| Private clue | A runner slip from your desk |
+| Mid-round private news | A runner arriving at your booth (§7.7) |
+| Buy offer / sell offer | "I will buy at" / "I will sell at". In the pit, bubbles show the shorthand "98 BID" and "102 OFFER" |
+| Position | Lots you hold (long) or owe (short) |
+| Unit | One lot |
+| Cash | Points |
+| Public information event | A wire flash on the LED ticker: crop report, weather bulletin, export sale |
+| Insider (One Insider mode) | The trader whose desk got the scoop |
+| Player identity | Jacket color and pattern, plus a 3-letter badge |
+| Settlement | The closing bell |
 
-#### Components Become Appraisal Factors
+#### Components Become Market Drivers
 
-In the Four Cards recipe, each component becomes a named factor of the item's worth:
+In the Four Cards recipe, each component becomes a named market driver. A driver is defined as its **effect on the price**, so a drought that pushes prices up is "Weather +4":
 
 ```text
-Hammer price = 100 + Authenticity + Rarity + Demand + Condition
-Each factor: -5 to +5 gold
+Settlement price = 100 + Weather + Supply Report + Export Demand + Stockpiles
+Each driver: -5 to +5
 ```
 
-Every item uses the same four factors, so players learn them once. Item-specific flavor lives in the clue text.
+Every contract uses the same four drivers, so players learn them once. Contract-specific flavor lives in the clue text. Runners (§7.7) need drivers that nobody starts with, so the runner recipe adds two more drivers (for example **Funds Flow** and **Freight**) to make six.
 
 #### Clue Text Is Flavor Plus a Precise Statement
 
 Every clue has two lines: an in-world line, and the exact statement it stands for. Flavor alone would be ambiguous, and the information model only works if every player can know exactly what their clue means.
 
 ```text
-"The gem is definitely authentic."
-Authenticity is not negative.
+"Drought watch across Iowa. Keep it quiet."
+Weather = +4
 
-"The royal collector is not interested."
-Demand is 0 or lower.
+"Elevators are full from here to Kansas."
+Stockpiles is negative
 
-"My appraiser says the setting is flawless."
-Condition = +4
+"Big export sale to Japan on the wire tonight."
+Export Demand is at least +2
 ```
 
-Party interface shows the precise line in smaller text beneath the flavor. Pro interface shows it prominently. Flavor text is chosen from per-item template pools so that a clue's wording never hints at its strength beyond what the precise statement says.
+The pit interface prints the precise line on the slip under the handwritten flavor line. Flavor text is chosen from per-contract template pools so that a clue's wording never hints at its strength beyond what the precise statement says.
 
 #### Events Are Part of the Recipe
 
-A mid-round event like "A rival kingdom announces a bounty on dragon artifacts" must be either:
+A mid-round event like "USDA crop report at 2:00" must be either:
 
-- **a public clue** about existing factors (for example, "Demand is at least +2"), or
-- **a recipe component** whose distribution was public from the start (for example, "Royal Bounty: 30% chance of +10, revealed at minute 2").
+- **a public clue** about existing drivers (for example, "Supply Report is at least +2"), or
+- **a recipe component** whose distribution was public from the start (for example, "Export embargo: 30% chance of −10, announced at minute 2").
 
-Either way, the event's outcome is sampled with the rest of the hidden state at round start. It is never invented mid-round, and it is never sent to clients before it fires (§31). This keeps fair values exact and events fair.
+Either way, the event's outcome is sampled with the rest of the hidden state at round start. It is never invented mid-round, and it is never sent to clients before it fires (§31). This keeps fair values exact and events fair. Public events arrive as wire flashes on the LED ticker.
 
-#### Units
+#### Prices and Units
 
-A single gem can't be split into 15 units, so items are traded in one of two ways:
+- **Prices stay abstract: 80 to 120 points on every contract.** Real contracts quote in different units (cents per bushel, dollars per barrel), which adds flavor but makes every round harder to read at a glance. Realistic per-contract quoting is a possible Pro-mode option later.
+- **One unit is one lot.**
 
-- **Goods sold in quantity**, like monster eggs, sacks of saffron, or vials of potion. One unit is one item.
-- **Shares in a single treasure**, like The Dragon's Eye or a pirate map. The House sells shares in the item, and each share pays out the hammer price in gold at the Grand Auction. One share is one unit.
+#### Contract Catalog
 
-The item card shows which applies.
+Each round draws a contract from a catalog. A contract defines its name, pit number, short description, and flavor pools for each driver. Contracts do not change the math, so the catalog can grow freely without rebalancing.
 
-#### Item Catalog
-
-Each round draws an item from a catalog. An item defines its name, art, one-line description, unit style, and flavor pools for each factor. Items do not change the math, so the catalog can grow freely without rebalancing.
-
-Examples:
-
-| Item | Unit | Description |
-|------|------|-------------|
-| The Dragon's Eye | Share | A fist-sized ruby said to see through lies |
-| Basilisk Eggs | Egg | Handle with gloves. Do not make eye contact |
-| Saffron of Qarth | Sack | Worth more than gold, if it's real |
-| The Drowned Captain's Map | Share | Leads to treasure, or to the bottom of the sea |
-| Cursed Locket | Share | Beautiful. Previous owners unavailable for comment |
+| Contract | Description |
+|----------|-------------|
+| December Corn | The pit everyone watches when the weather turns |
+| Soybeans | Moves on every rumor out of Brazil |
+| Live Cattle | Feed costs, weather, and a lot of shouting |
+| Pork Bellies | The contract your uncle still talks about |
+| Frozen Orange Juice | One frost in Florida and the pit goes wild |
+| Crude Oil | Pipelines, tankers, and politics |
 
 #### Example Round
 
 ```text
-THE DRAGON'S EYE
-Rumored value: 80 to 120 gold
+DECEMBER CORN · PIT 4
+Settles between 80 and 120
 
-Your appraisal:  "The gem is definitely authentic."
-                 Authenticity is not negative.
+Runner slip:  "Drought watch across Iowa. Keep it quiet."
+              Weather = +4
 
-Secret objective: Finish holding at least 15 shares.
+Desk memo (secret objective): Finish long 15 or more.
 
-Minute 2 — ROYAL DECREE
-"A rival kingdom announces a bounty on dragon artifacts."
-Demand is at least +2.
+1:30 left · WIRE FLASH on the ticker
+"USDA: export sales strong this week."
+Export Demand is at least +2.
+
+0:58 left · a runner sprints toward MRL's booth.
 ```
 
 #### Theme and Name
 
-"Whale" still fits: in the auction house, a whale is a merchant who buys big. Awards and objectives keep their current names where they read naturally in-world.
+"Whale" fits the pit: a whale is the trader whose size moves the market. Awards and objectives keep their names where they read naturally on the floor.
+
+### 7.7 Runners: Mid-Round Private News
+
+On the real floor, orders and news reached traders by phone and by **runners** carrying paper slips, and traders watched the runners: when a runner reached a broker, the pit noticed. Whale uses this as a mechanic.
+
+#### Rules
+
+- **Starting clues arrive together at the bell,** as runner slips on every desk, so the start of a round has no tell.
+- **Each player receives one runner per round,** at a random time between 25% and 75% of the trading window. Every player gets the same number, and the order is random. Runners never favor players who are behind, since that would leak the standings.
+- **A runner brings new information:** the answer to a question about a driver that nobody started with (the six-driver recipe in §7.6), at medium strength (0.10 to 0.25, §7.4).
+- **Everyone sees the runner, nobody sees the slip.** The runner is visible crossing the floor toward the recipient's booth for about 2 seconds before arriving. Only the recipient reads the slip.
+
+#### Why it works
+
+- It reveals **that** someone is informed, not **what** they know. That is the market maker's real situation: you can't see the news, but you can see who just got some.
+- **The recipient** chooses between trading immediately, before others react, and waiting or bluffing, because everyone is watching.
+- **Market makers** choose between pulling or widening their quotes whenever a runner moves (safe but costly) and keeping their quotes up and risking being picked off.
+- **Calls** gain a natural target: call the player whose runner just arrived. They must quote within the width limit, which squeezes their information out, or quote the widest market they're allowed, which is itself a tell.
+
+#### Exactness
+
+A runner slip is one more answer in the recipient's information. The question is chosen without looking at the hidden state and answered from the same likelihoods as any clue (§7.3), so fair values stay exact. The server emits a public `runner_dispatched` event (recipient and arrival time) and a private slip for the recipient only (§31).
+
+#### Bots
+
+Bots track how informed each other player is likely to be. When a runner reaches a player, bots raise that player's informed weight (π in §19.2), let it fade over about 20 seconds, and widen their regret-free quotes accordingly.
+
+#### Tuning
+
+The simulator (§32.4) measures how much the recipient earns in the seconds after a runner arrives, how far spreads widen, and whether the market keeps trading or freezes. The knobs are travel time (a short walk favors the recipient, a long one favors market makers), news strength, and runners per round.
+
+#### Later options
+
+- **Rumor slips:** some runners carry news with a stated reliability (for example 70%).
+- **Decoy runners (Chaos mode):** a player pays to send an empty runner to someone else's booth, to make them look informed.
+- **Analytics:** markouts around runner arrivals, for example "you were picked off 3 seconds after MRL's runner arrived" (§17.1).
 
 ---
 
@@ -930,72 +967,38 @@ A small gap gets more trades. A big gap protects you when someone knows more tha
 
 ## 14. Trading Interface
 
-### Core Elements
+### Core Elements: The Booth
 
-Desktop (Standard) layout should contain:
+The main screen (laptop browser first) is your **booth** at the edge of the pit: a window onto the pit above, your desk below (§36).
 
-#### Center
+#### The ticker (top)
 
-Order book / available offers
+An amber LED ticker crawls with the public tape: trades with badges, quote changes, calls, and wire flashes.
 
-```text
-SELL OFFERS
+#### The pit window
 
-112    5
-110    8
-108    3
+- The far side of the pit, packed with traders on its steps. Named traders show their current market in a bubble ("98 BID / 102 OFFER") and shout when they trade.
+- The **LED wall board**: contract, bid, offer, last, and time to close. In Standard and Pro views it extends into the price ladder, listing badges at each price, with your own badge shown inverted.
+- **Runners** crossing the floor (§7.7). A player calling you steps up to the front of the window.
+- Each trader has a **Call** action for Make Me a Market.
 
-──────────
-
-106    10
-104    6
-102    5
-
-BUY OFFERS
-```
-
-The player's own orders are highlighted.
-
-#### Left Panel
-
-Private clue
+#### The desk
 
 ```text
-YOUR CLUE
-
-B > 0
+RUNNER SLIP        "Drought watch across Iowa."  Weather = +4
+DESK MEMO          Standing order: finish long 15 or more (+40)   6 of 15
+ORDER TICKET       BUY [97] for [5] lots   SELL [103] for [5] lots   Gap 6   [POST TO PIT] [PULL]
+TRADING CARD       14:31  S  5  101  BRN   (your fills, in ink)
+STAMPS             [BUY 5 at 102 from GLD]  [SELL 3 at 99 to MRL]   size 1 / 2 / 5 / 10
+LED COUNTER        POSITION +6   P&L +18
 ```
 
-Secret objective
-
-```text
-SECRET OBJECTIVE
-
-Finish with at least +15 inventory.
-```
-
-#### Right Panel
-
-Player status
-
-```text
-Cash
-Position (with limit bar: +12 / 25)
-Round P&L (at the current market middle)
-Score
-```
-
-Players at the table, each with a **Call** button for Make Me a Market.
-
-#### Bottom
-
-Your Market and fast trade controls
-
-```text
-YOUR MARKET   [104] × [5]   /   [108] × [5]   (Gap 4)
-
-BUY   SELL   PRICE   SIZE
-```
+- The **runner slip** is your private clue: the flavor line and the precise statement.
+- The **desk memo** is your secret objective, with a tally.
+- The **order ticket** is Your Market (§8.1).
+- The **trading card** lists your fills: time, side, size, price, and counterparty badge.
+- The **stamps** take the best offer (palms in) or the best bid (palms out).
+- When you are called, a call slip lands on the desk with the countdown, and the caller stands at the front of the window.
 
 ### Party Interface (phone-first)
 
@@ -1073,20 +1076,20 @@ This is a critical product feature.
 
 ### Reveal Sequence
 
-1. Final value animation
-2. P&L recalculation
-3. Ranking movement
-4. Private clues revealed, with each clue's fair value and strength
-5. Secret objectives revealed
-6. Price discovery chart (§17.3)
-7. Personal P&L breakdown (§17.2)
-8. Awards shown
-9. Key trades highlighted, including "picked off" moments
+1. **The closing bell:** the camera pulls back to the overhead view, and the floor is covered in paper, one scrap per trade (§36.6).
+2. **The settlement price** lights up on the LED board.
+3. **The settlement ledger**, itemized like an end-of-day ledger:
+   - **How it settled:** each driver's value, marked with who knew it ("Weather +4, your slip"; "Export Demand −1, MRL knew").
+   - **Your book:** earned from your gap, lost to better-informed players (by counterparty), your own bets, fees, and the total (§17.2).
+   - **Your standing order:** met or missed, and the bonus.
+4. **The floor, who knew what:** every trader's slips, including runner slips, their objective, and their round score, ranked.
+5. **The tell you missed:** one plain-language line drawn from the attribution, for example "MRL sold to you 4 times at 102 and up; her desk said Export Demand was weak."
+6. Price discovery chart (§17.3), awards, and key trades, including "picked off" moments.
 
 ### Example
 
 ```text
-FINAL VALUE
+SETTLEMENT PRICE
 117
 ```
 
@@ -1270,6 +1273,8 @@ The inventory lean (γ, after Avellaneda–Stoikov) lets a bot give up its adver
 **Taking.** The bot takes an offer when its edge versus fair value is above a threshold and its position limit allows.
 
 **Answering calls.** The bot widens its gap based on how informed it believes the caller is, using the caller's past flow.
+
+**Reacting to runners.** When a runner reaches another player, the bot raises its estimate of how informed that player is, lets it fade over about 20 seconds, and widens its quotes to them in the meantime (§7.7).
 
 ### 19.3 Personalities
 
@@ -2050,33 +2055,52 @@ within one glance.
 
 The game should not look like Bloomberg or a brokerage platform. The Pro interface may be denser, but it uses the same visual language.
 
-Desired aesthetic:
+Concept mockups live on the Whale UI concepts canvas (the "pit" row and the sprite review). The research behind them is in `docs/design/pit-references.md`.
 
-- bold
-- playful
-- high-contrast
-- game-show energy
-- clean
-- slightly chaotic during events
-- readable under time pressure
+### 36.1 Setting and tone
 
-Setting: a lively fantasy auction house (§7.6). Item cards, gold coins, a hammer-drop settlement moment, and a bustling trading floor give the reveal its drama.
+An open-outcry pit in the Chicago of the 1970s to 1990s (§7.6): loud, crowded, and papery. The party energy comes from the crowd, the shouting, and the paper, not from glossy UI.
 
-Possible references in spirit:
+### 36.2 Art style
 
-- Jackbox
-- Balatro
-- Polymarket-style probability visualization
-- arcade trading floor
-- poker table dynamics
+- **Low-resolution pixel art in the spirit of *Papers, Please*:** a window onto the world above, your desk below, and restraint everywhere. It is a style reference only; nothing is copied from that game.
+- **Hand-placed pixels, small palettes:** three tones per material (light, base, shadow), lit from the left. No dithering noise, no outlines on every edge, no faces. Detail beyond this looked worse in testing, not better.
 
-Avoid:
+### 36.3 Traders (sprite spec "B3")
 
-- dense professional dashboards (outside Pro)
-- excessive candlestick charts
-- dark institutional terminal styling
+- **Base body:** 14×20 pixels, symmetric about its center.
+- **Poses:** idle; **buy** (palms in, both arms straight up); **sell** (palms out, arms out wide); **call** (one arm up); **run** (for runners). Buy and sell must read as clearly different shapes at game size.
+- **Identity:** jacket color and pattern (solid, plaid, or stripes, as on the real floor) and a 3-letter **badge** on the wearer's left chest. Faces are not used for identity.
+- **Dress:** lapels with either a short tapered tie or an open collar, roughly two ties to one open collar across the crowd. Tie colors contrast with the jacket. Trousers are mid-tones so they stay visible on the dark floor.
+- **Named traders** keep a fixed look across rounds. Runners wear tan jackets.
+- **Perspective:** the far step renders at 3× scale, the middle step at 4×, the front step at 5×, and the pit floor at 6×. Every trader stands on their own step.
+- **Art pipeline:** sprites are palette-indexed grids, so a pixel artist can replace them with a sprite sheet (one base body, five poses, recolors) without code changes.
+
+### 36.4 The floor and the desk
+
+- **The pit window:** the far side of the pit, with steps drawn as lit treads over dark risers, packed with traders. Named traders show speech bubbles ("98 BID / 102 OFFER", "BUY 'EM!"). Runners cross the floor (§7.7).
+- **Digital, not chalk:** an amber dot-matrix **LED ticker** across the top and an **LED wall board** in the pit (bid, offer, last, time to close). In Standard and Pro views, the board doubles as the price ladder.
+- **Private information is paper on your desk:** runner slips, carbon-copy order tickets (white over canary), trading cards in blue ink, desk memos, and rubber stamps for taking the best price.
+- **Paper accumulates on the floor** during the round: one scrap per real trade.
+
+### 36.5 Palette and type
+
+- **Colors:** a muted olive-grey pit, a walnut desk, paper whites with canary and pink carbon copies, carbon-blue ink, stamp red, and amber LED. **Buy is blue and sell is orange**, distinguishable by lightness as well as hue.
+- **Type:** Pixelify Sans for UI and handwriting, Silkscreen for small form labels, Doto for the LED dot matrix.
+
+### 36.6 The round camera
+
+1. **The bell:** overhead view of the pit, floor clean, your spot ringed.
+2. **The dive:** a smooth, eased zoom onto your spot (about 1.5–2 seconds), crossfading into the booth.
+3. **The round:** the booth view.
+4. **The close:** a smooth pull-back to overhead as the paper settles; the floor shows how wild the round was before any numbers appear. Then the settlement ledger (§16).
+
+### 36.7 Avoid
+
+- dashboards, candlestick charts, and unnecessary financial widgets
+- glossy gradients, glows, rounded cards, and emoji
+- high-detail procedural shading and faces
 - tiny numbers
-- unnecessary financial widgets
 
 ---
 
@@ -2265,15 +2289,17 @@ Goal:
 
 Four players can complete a full match reliably.
 
-### Phase 3: Party Layer and Reveal
+### Phase 3: The Pit, Party Layer and Reveal
 
 Add:
 
+- the pit interface: booth window, desk, LED ticker and board, pixel traders (§14, §36)
+- the round camera: overhead dive at the bell, pull-back over the paper at the close (§36)
+- runners and the six-driver recipe (§7.7)
 - secret objectives
 - reactions
-- reveal with P&L breakdown
+- settlement ledger reveal with P&L breakdown (§16)
 - awards
-- reveal animations
 - sound
 
 Goal:
