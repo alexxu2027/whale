@@ -15,6 +15,7 @@ From `backend/`:
 - `uv run pytest`: all tests, including the Hypothesis stateful engine tests
 - `uv run python bench/bench_engine.py`: engine throughput benchmark
 - `uv run python -m whale.sim.harness --rounds 300 [--table "Market Maker,Shark,..."]`: headless bot-vs-bot rounds with balance stats
+- `uv run python -m whale.sim.harness --recipe pit_six --rounds 200`: the same with runners, plus runner metrics (recipient edge, spread widening, freezes)
 - `uv run uvicorn whale.multiplayer.server:app --reload`: game server on :8000
 
 From `frontend/`: `npm run dev` (client on :5173, proxies to :8000), `npm run build`, `npm run lint`, `npx tsc -b`.

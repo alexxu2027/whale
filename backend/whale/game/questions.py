@@ -3,7 +3,7 @@
 A clue is generated in two steps:
 
 1. A **question** is chosen without looking at the hidden state
-   ("What is Demand?", "Is the hammer price at least 105?").
+   ("What is Export Demand?", "Is the settlement price at least 105?").
 2. The question is **answered** from the hidden state. Each question defines a
    likelihood matrix ``L[answer, state] = P(answer | state)`` whose columns
    sum to 1. Truthful questions put probability 1 on the answer containing

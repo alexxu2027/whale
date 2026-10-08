@@ -45,6 +45,7 @@ from whale.engine import (
     Trade,
 )
 from whale.game.dealing import Clue
+from whale.game.runners import RunnerArrived
 from whale.game.recipes import Recipe
 from whale.game.setup import Dealing
 
@@ -94,9 +95,15 @@ class Bot:
             and event.taker_id is not None
             and event.taker_id != self.player_id
         ):
-            self.tracker.observe_take(event.taker_id, event.aggressor_side is Side.BUY, event.price)
+            self.tracker.observe_take(event.taker_id, event.aggressor_side is Side.BUY, event.price, event.ts)
         if isinstance(event, CallAnswered) and not event.automatic and event.responder_id != self.player_id:
-            self.tracker.observe_answer(event.responder_id, event.bid_price, event.ask_price)
+            self.tracker.observe_answer(event.responder_id, event.bid_price, event.ask_price, event.ts)
+        if isinstance(event, RunnerArrived) and event.recipient_id != self.player_id:
+            self.tracker.runner_arrived(event.recipient_id, event.ts)
+
+    def receive_clue(self, clue: Clue) -> None:
+        """The bot's own runner slip arrived (PRD §7.7)."""
+        self.tracker.add_own(clue.answer)
 
     def fair_value(self) -> tuple[float, float]:
         mean, sd = self.tracker.fair_value()
@@ -193,11 +200,12 @@ class Bot:
             order_type=OrderType.IOC,
         )
 
-    def quote_prices(self, position: int) -> tuple[int, int]:
+    def quote_prices(self, position: int, now: int | None = None) -> tuple[int, int]:
         """(bid, ask): regret-free bounds, widened to the personal margin,
-        then leaned against inventory."""
+        then leaned against inventory. Wider for a while after a runner
+        reaches another player."""
         fv, _ = self.fair_value()
-        gm_bid, gm_ask = self.tracker.regret_free_quote()
+        gm_bid, gm_ask = self.tracker.regret_free_quote(now)
         margin = self.p.base_half_width
         lean = self.p.inventory_skew * position
         bid = tick_down(min(gm_bid + self._bias, fv - margin) - lean)
@@ -212,7 +220,7 @@ class Bot:
         p = self.p
         if not p.quote_size:
             return None
-        bid, ask = self.quote_prices(view.position)
+        bid, ask = self.quote_prices(view.position, view.now)
         bid = min(max(bid, view.price_min), view.price_max - 1)
         ask = min(max(ask, bid + 1), view.price_max)
 
@@ -253,7 +261,7 @@ class Bot:
         call = view.my_call
         assert call is not None
         if call.is_responder and call.stage is CallStage.AWAITING_ANSWER:
-            bid, ask = self.quote_prices(view.position)
+            bid, ask = self.quote_prices(view.position, view.now)
             if ask - bid > view.call_max_width:
                 # The rules cap the width, so tighten around the middle and
                 # accept some expected regret. That's the pressure of a call.

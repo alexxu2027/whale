@@ -71,12 +71,13 @@ def question_catalog(recipe: Recipe) -> tuple[RatedQuestion, ...]:
 
 
 def choose_one_card_each(recipe: Recipe, players: Sequence[str], rng: random.Random) -> dict[str, Question]:
-    """Prototype dealing (PRD §42): each player sees one component exactly.
+    """Prototype dealing (PRD §42): each player sees one starting driver exactly.
 
-    Components are shuffled and handed out in order, so with as many players
-    as components everyone sees a different one.
+    Starting drivers are shuffled and handed out in order, so with as many
+    players as starting drivers everyone sees a different one. Drivers kept
+    for runners (PRD §7.7) are never dealt at the start.
     """
-    order = list(range(len(recipe.components)))
+    order = list(recipe.starting_drivers)
     rng.shuffle(order)
     return {p: ExactQ(order[n % len(order)]) for n, p in enumerate(players)}
 

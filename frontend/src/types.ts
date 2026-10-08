@@ -10,6 +10,8 @@ export interface PlayerInfo {
   is_bot: boolean
   personality: string | null
   connected: boolean
+  badge: string // 3 letters, unique in the room
+  look: number // index into the jacket palette
 }
 
 export interface RoomMsg {
@@ -30,7 +32,7 @@ export interface RoundStartMsg {
   type: 'round_start'
   round_number: number
   rounds: number
-  item: { name: string; unit: string; description: string }
+  contract: Contract
   recipe: { title: string; description: string; factor_names: string[]; min: number; max: number; average: number }
   clue: { flavor: string; precise: string }
   objective: { id: string; title: string; description: string; bonus: number }
@@ -47,7 +49,28 @@ export interface RoundStartMsg {
     call_cooldown_ms: number
     maker_rebate: number
     taker_fee: number
+    runner_travel_ms: number
   }
+}
+
+export interface Contract {
+  name: string
+  pit: number
+  description: string
+}
+
+export interface PublicQuote {
+  bid: number | null
+  bid_qty: number
+  ask: number | null
+  ask_qty: number
+}
+
+export interface Slip {
+  kind: 'start' | 'runner'
+  flavor: string
+  precise: string
+  ts: number
 }
 
 export interface MarketMsg {
@@ -58,6 +81,8 @@ export interface MarketMsg {
   bids: [number, number][]
   asks: [number, number][]
   mid: number
+  last: number | null
+  quotes: Record<string, PublicQuote> // each player's posted market, by player id
 }
 
 export interface CallState {
@@ -80,6 +105,7 @@ export interface YouMsg {
   room_to_sell: number
   quote: { bid: number | null; bid_qty: number; ask: number | null; ask_qty: number }
   orders: { id: number; side: Side; price: number; qty: number }[]
+  slips: Slip[]
   call: CallState | null
   server_now: number
 }
@@ -92,7 +118,10 @@ export interface RevealPlayer {
   pnl: number
   bonus: number
   score: number
+  badge: string
   clue: { flavor: string; precise: string }
+  slips: { flavor: string; precise: string }[]
+  tell: string | null
   objective: { title: string; description: string; bonus: number; met: boolean }
   breakdown: {
     spread: number
@@ -107,30 +136,33 @@ export interface RevealMsg {
   type: 'reveal'
   round_number: number
   rounds: number
-  item: { name: string; unit: string }
+  contract: { name: string; pit: number }
   final_value: number
-  factors: { name: string; value: number }[]
+  trades: number
+  factors: { name: string; value: number; knew: string[] }[] // knew: badges of everyone told about it
   players: RevealPlayer[]
   match_scores: Record<string, number>
   last_round: boolean
 }
 
+export interface TradeEvent {
+  type: 'trade'
+  seq: number
+  ts: number
+  trade_id: number
+  kind: 'book' | 'auction' | 'call'
+  price: number
+  qty: number
+  buyer_id: string
+  seller_id: string
+  maker_id: string | null
+  taker_id: string | null
+  aggressor_side: Side | null
+}
+
 // Engine events, as serialized by event_to_wire.
 export type GameEvent =
-  | {
-      type: 'trade'
-      seq: number
-      ts: number
-      trade_id: number
-      kind: 'book' | 'auction' | 'call'
-      price: number
-      qty: number
-      buyer_id: string
-      seller_id: string
-      maker_id: string | null
-      taker_id: string | null
-      aggressor_side: Side | null
-    }
+  | TradeEvent
   | { type: 'call_started'; seq: number; ts: number; call_id: number; caller_id: string; responder_id: string }
   | {
       type: 'call_answered'
@@ -147,6 +179,9 @@ export type GameEvent =
   | { type: 'call_ended'; seq: number; ts: number; call_id: number; outcome: string }
   | { type: 'status_changed'; seq: number; ts: number; status: MarketStatus }
   | { type: 'order_rejected'; seq: number; ts: number; reason: string }
+  | { type: 'runner_dispatched'; seq: number; ts: number; runner_id: number; recipient_id: string; arrive_at: number }
+  | { type: 'runner_arrived'; seq: number; ts: number; runner_id: number; recipient_id: string }
+  | { type: 'runner_slip'; seq: number; ts: number; runner_id: number; player_id: string; flavor: string; precise: string }
   | { type: string; seq: number; ts: number; [key: string]: unknown }
 
 export type ServerMsg =

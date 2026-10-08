@@ -4,6 +4,7 @@ Bots are scheduled by ``BotRunner`` (decide, think, arrive), the same code
 live rooms use, and their commands go through a real ``Round``.
 
     uv run python -m whale.sim.harness --rounds 500
+    uv run python -m whale.sim.harness --recipe pit_six --rounds 200   # with runners
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from whale.bots.bot import Bot
 from whale.bots.runner import BotRunner
 from whale.bots.personalities import ALL, Difficulty, Personality, with_difficulty
 from whale.engine import CENTS_PER_POINT, MarketConfig, OrderRejected, Side, Trade, TradeKind
-from whale.game.recipes import FOUR_CARDS, Recipe
+from whale.game.recipes import FOUR_CARDS, RECIPES, Recipe
 from whale.game.round import Round, RoundConfig, RoundResult
 from whale.game.setup import Dealing
 
@@ -56,6 +57,22 @@ class RoundSummary:
     discovery: float | None  # 1 - |mid_end - V| / |prior mean - V|; None if V == prior mean
     events: int = 0
     personality_of: dict[str, str] = field(default_factory=dict)
+    runners: list[RunnerStats] = field(default_factory=list)
+
+
+RUNNER_WINDOW_MS = 20_000  # how long after arrival we measure a runner's effect
+SAMPLE_MS = 500  # spread sampling interval
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerStats:
+    """What one runner did to the market (PRD §7.7 tuning)."""
+
+    edge: float  # recipient's trading P&L, marked to the final value, in the window after arrival
+    trades_before: int  # trades in the window before arrival
+    trades_after: int  # trades in the window after arrival
+    spread_before: float | None  # mean quoted spread before arrival
+    spread_after: float | None
 
 
 def simulate_round(
@@ -78,13 +95,50 @@ def simulate_round(
         stats[pid].commands += 1
 
     runner = BotRunner(rnd, {b.player_id: b for b in bots}, rng, start=0, on_command=count)
+    spreads: list[tuple[int, int | None]] = []
+    if rnd.runners:
+        # Sample the quoted spread over time so runner effects can be measured.
+        for t in range(0, rnd.close_at - 1, SAMPLE_MS):
+            runner.run_until(t)
+            rnd.advance(t)
+            b, a = rnd.exchange.book.best_price(Side.BUY), rnd.exchange.book.best_price(Side.SELL)
+            spreads.append((t, a - b if b is not None and a is not None else None))
     runner.run_until(rnd.close_at - 1)
 
     bid, ask = rnd.exchange.book.best_price(Side.BUY), rnd.exchange.book.best_price(Side.SELL)
     rnd.advance(rnd.close_at)
     result = rnd.result
     assert result is not None
-    return _summarize(seed, rnd, result, stats, bid, ask, {s.name: s.personality.name for s in seats})
+    summary = _summarize(seed, rnd, result, stats, bid, ask, {s.name: s.personality.name for s in seats})
+    summary.runners = _runner_stats(rnd, result.final_value, spreads)
+    return summary
+
+
+def _runner_stats(rnd: Round, final_value: int, spreads: list[tuple[int, int | None]]) -> list[RunnerStats]:
+    trades = [e for e in rnd.log if isinstance(e, Trade)]
+    out = []
+    for plan in rnd.runners:
+        t0, w = plan.arrive_at, RUNNER_WINDOW_MS
+        after = [t for t in trades if t0 <= t.ts < t0 + w]
+        edge = 0
+        for t in after:
+            if t.buyer_id == plan.recipient:
+                edge += (final_value - t.price) * t.qty
+            if t.seller_id == plan.recipient:
+                edge += (t.price - final_value) * t.qty
+
+        def mean_spread(lo: int, hi: int) -> float | None:
+            xs = [x for ts, x in spreads if lo <= ts < hi and x is not None]
+            return statistics.fmean(xs) if xs else None
+
+        out.append(RunnerStats(
+            edge=float(edge),
+            trades_before=sum(1 for t in trades if t0 - w <= t.ts < t0),
+            trades_after=len(after),
+            spread_before=mean_spread(t0 - w, t0),
+            spread_after=mean_spread(t0, t0 + w),
+        ))
+    return out
 
 
 def _summarize(
@@ -150,6 +204,7 @@ class Report:
     calls_per_round: float
     discovery_median: float
     rejection_rate: float
+    runners: list[RunnerStats] = field(default_factory=list)
 
     def render(self) -> str:
         lines = [
@@ -167,6 +222,22 @@ class Report:
             win = self.wins.get(name, 0) / self.rounds
             maker = self.passive_share.get(name, 0.0)
             lines.append(f"{name:<16}{mean:>10.1f}{ci:>8.1f}{sd:>8.1f}{win:>8.0%}{maker:>9.0%}")
+        if self.runners:
+            rs = self.runners
+            edges = [r.edge for r in rs]
+            ci = 1.96 * statistics.stdev(edges) / math.sqrt(len(edges)) if len(edges) > 1 else 0.0
+            sb = [r.spread_before for r in rs if r.spread_before is not None]
+            sa = [r.spread_after for r in rs if r.spread_after is not None]
+            frozen = sum(1 for r in rs if r.trades_before > 0 and r.trades_after == 0) / len(rs)
+            lines += [
+                "",
+                f"runners ({len(rs)}; {RUNNER_WINDOW_MS // 1000}s windows around arrival)",
+                f"  recipient edge after arrival  {statistics.fmean(edges):+.1f} ±{ci:.1f} points",
+                (f"  quoted spread  before {statistics.fmean(sb) if sb else float('nan'):.2f}   "
+                 f"after {statistics.fmean(sa) if sa else float('nan'):.2f}"),
+                (f"  trades  before {statistics.fmean(r.trades_before for r in rs):.1f}   "
+                 f"after {statistics.fmean(r.trades_after for r in rs):.1f}   market froze {frozen:.0%}"),
+            ]
         return "\n".join(lines)
 
     @property
@@ -182,8 +253,10 @@ def run_many(seats: Sequence[Seat], rounds: int, base_seed: int = 0, **kw) -> Re
     aggressive: dict[str, int] = defaultdict(int)
     trades = calls = rejections = commands = 0
     discoveries: list[float] = []
+    runner_stats: list[RunnerStats] = []
     for r in range(rounds):
         s = simulate_round(seats, base_seed + r, **kw)
+        runner_stats += s.runners
         trades += s.trades
         calls += s.call_trades
         for name, ps in s.players.items():
@@ -207,6 +280,7 @@ def run_many(seats: Sequence[Seat], rounds: int, base_seed: int = 0, **kw) -> Re
         calls_per_round=calls / rounds,
         discovery_median=statistics.median(discoveries) if discoveries else float("nan"),
         rejection_rate=rejections / max(1, commands),
+        runners=runner_stats,
     )
 
 
@@ -224,13 +298,17 @@ def main() -> None:
     ap.add_argument("--table", default="Market Maker,Shark,Noise Trader,Conservative",
                     help="comma-separated personalities, one per seat")
     ap.add_argument("--difficulty", choices=[d.value for d in Difficulty], default=Difficulty.MEDIUM.value)
+    ap.add_argument("--recipe", choices=sorted(RECIPES), default=FOUR_CARDS.id)
+    ap.add_argument("--no-runners", action="store_true", help="turn runners off (pit_six only)")
+    ap.add_argument("--travel-ms", type=int, default=2_000, help="how long a runner is visible before arriving")
     args = ap.parse_args()
 
     by_name = {p.name: p for p in ALL}
     diff = Difficulty(args.difficulty)
     seats = [Seat(f"bot{i}", with_difficulty(by_name[n.strip()], diff)) for i, n in enumerate(args.table.split(","))]
-    config = RoundConfig(dealing=Dealing(args.dealing), market=MarketConfig())
-    print(run_many(seats, args.rounds, args.seed, config=config).render())
+    config = RoundConfig(dealing=Dealing(args.dealing), market=MarketConfig(),
+                         runners=not args.no_runners, runner_travel_ms=args.travel_ms)
+    print(run_many(seats, args.rounds, args.seed, config=config, recipe=RECIPES[args.recipe]).render())
 
 
 if __name__ == "__main__":

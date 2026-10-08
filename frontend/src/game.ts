@@ -12,6 +12,7 @@ import type {
   RoomMsg,
   RoundStartMsg,
   ServerMsg,
+  TradeEvent,
   YouMsg,
 } from './types'
 
@@ -19,6 +20,16 @@ export interface FeedItem {
   id: number
   ts: number
   event: GameEvent
+}
+
+/** A runner crossing the floor (PRD §7.7). Everyone sees it; only the
+ * recipient reads the slip. */
+export interface Runner {
+  id: number
+  recipient: string
+  dispatchedAt: number
+  arriveAt: number
+  arrived: boolean
 }
 
 export interface GameState {
@@ -33,6 +44,8 @@ export interface GameState {
   you: YouMsg | null
   reveal: RevealMsg | null
   feed: FeedItem[]
+  runners: Runner[]
+  myTrades: TradeEvent[] // newest first, for the trading card
   // serverNow ≈ Date.now() + offset
   offset: number
 }
@@ -49,6 +62,8 @@ const initial: GameState = {
   you: null,
   reveal: null,
   feed: [],
+  runners: [],
+  myTrades: [],
   offset: 0,
 }
 
@@ -62,11 +77,12 @@ type Action =
   | { kind: 'leave' }
 
 const FEED_LIMIT = 80
+const FEED_TYPES = new Set(['trade', 'call_started', 'call_answered', 'call_ended', 'status_changed', 'runner_dispatched', 'runner_arrived'])
 
 const REJECT_TEXT: Record<string, string> = {
   market_not_open: "The market isn't open.",
   rate_limited: 'Slow down a little!',
-  price_out_of_band: "That price is outside the item's possible range.",
+  price_out_of_band: "That price is outside the pit's price band.",
   invalid_qty: 'That size is not allowed.',
   position_limit: "That would take you past your position limit.",
   would_cross: "Your price would trade with someone. Use Buy/Sell to trade instead.",
@@ -108,12 +124,12 @@ function applyMessage(state: GameState, msg: ServerMsg, receivedAt: number): Gam
       return { ...state, me: msg.player_id, code: msg.code }
     case 'room': {
       const next = { ...state, ...withClock, room: msg }
-      if (msg.phase === 'lobby') return { ...next, round: null, market: null, you: null, reveal: null, feed: [] }
+      if (msg.phase === 'lobby') return { ...next, round: null, market: null, you: null, reveal: null, feed: [], runners: [], myTrades: [] }
       if (msg.phase === 'playing' && state.room?.phase !== 'playing') return { ...next, reveal: null }
       return next
     }
     case 'round_start':
-      return { ...state, ...withClock, round: msg, reveal: null, feed: [], market: null, you: null }
+      return { ...state, ...withClock, round: msg, reveal: null, feed: [], runners: [], myTrades: [], market: null, you: null }
     case 'market':
       return { ...state, ...withClock, market: msg }
     case 'you':
@@ -126,10 +142,21 @@ function applyMessage(state: GameState, msg: ServerMsg, receivedAt: number): Gam
         const reason = String((e as { reason: string }).reason)
         return { ...state, toast: { id: ++toastId, text: REJECT_TEXT[reason] ?? `Rejected: ${reason}` } }
       }
-      if (!['trade', 'call_started', 'call_answered', 'call_ended', 'status_changed'].includes(e.type)) return state
+      if (!FEED_TYPES.has(e.type)) return state
       if (state.feed.some((f) => f.id === e.seq)) return state
       const feed = [{ id: e.seq, ts: e.ts, event: e }, ...state.feed].slice(0, FEED_LIMIT)
-      return { ...state, feed }
+      let { runners, myTrades } = state
+      if (e.type === 'runner_dispatched') {
+        const r = e as Extract<GameEvent, { type: 'runner_dispatched' }>
+        runners = [...runners.filter((x) => x.id !== r.runner_id), { id: r.runner_id, recipient: r.recipient_id, dispatchedAt: r.ts, arriveAt: r.arrive_at, arrived: false }]
+      } else if (e.type === 'runner_arrived') {
+        const id = (e as Extract<GameEvent, { type: 'runner_arrived' }>).runner_id
+        runners = runners.map((x) => (x.id === id ? { ...x, arrived: true } : x))
+      } else if (e.type === 'trade') {
+        const t = e as TradeEvent
+        if (t.buyer_id === state.me || t.seller_id === state.me) myTrades = [t, ...myTrades]
+      }
+      return { ...state, feed, runners, myTrades }
     }
     case 'error':
       if (msg.fatal) return { ...state, fatal: msg.message, connection: 'closed' }

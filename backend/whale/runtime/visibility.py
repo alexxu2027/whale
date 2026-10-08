@@ -1,6 +1,7 @@
 """Who may see which event (PRD §29.1, §31).
 
-Public: trades, calls, and market status. Everything about individual orders
+Public: trades, calls, market status, and runners crossing the floor (but not
+what their slips say). Everything about individual orders
 (accepted, amended, cancelled, rejected) and quote bookkeeping goes only to
 the order's owner; other players see the book as aggregated price levels.
 
@@ -23,9 +24,10 @@ from whale.engine import (
     StatusChanged,
     Trade,
 )
+from whale.game.runners import RunnerArrived, RunnerDispatched, RunnerSlip
 
-_PUBLIC = (Trade, CallStarted, CallAnswered, CallEnded, StatusChanged)
-_OWNER_ONLY = (OrderAccepted, OrderAmended, OrderCancelled, OrderRejected, QuoteUpdated)
+_PUBLIC = (Trade, CallStarted, CallAnswered, CallEnded, StatusChanged, RunnerDispatched, RunnerArrived)
+_OWNER_ONLY = (OrderAccepted, OrderAmended, OrderCancelled, OrderRejected, QuoteUpdated, RunnerSlip)
 
 
 def is_visible(event: Event, player_id: str) -> bool:

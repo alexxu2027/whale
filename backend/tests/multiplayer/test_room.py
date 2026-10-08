@@ -268,13 +268,56 @@ def test_nothing_hidden_leaks_before_the_reveal(seed: int) -> None:
                 text
                 for player in reveal["players"]
                 if player["id"] != pid
-                for text in (player["clue"]["precise"], player["objective"]["description"])
+                for text in (player["objective"]["description"], *(sl["precise"] for sl in player["slips"]))
             }
             mine = next(pl for pl in reveal["players"] if pl["id"] == pid)
-            others -= {mine["clue"]["precise"], mine["objective"]["description"]}
+            others -= {mine["objective"]["description"], *(sl["precise"] for sl in mine["slips"])}
             before = [m for m in chunk if m["type"] != "reveal"]
             blob = json.dumps(before)
             for text in others:
                 assert text not in blob, f"{pid} saw another player's secret: {text}"
             for m in before:
                 assert not (keys(m) & FORBIDDEN_KEYS), (pid, m["type"], keys(m) & FORBIDDEN_KEYS)
+
+
+def events(msgs: list[dict[str, Any]], t: str) -> list[dict[str, Any]]:
+    return [m["event"] for m in msgs if m["type"] == "event" and m["event"]["type"] == t]
+
+
+def test_runner_slip_reaches_only_its_recipient() -> None:
+    room, pids = started_room(humans=2, bots=2)
+    inbox(room)
+    rnd = room._rs.round
+    plan = next(r for r in rnd.runners if r.recipient == pids[0])
+    room.tick(plan.dispatch_at)
+    msgs = inbox(room)
+    for pid in pids:
+        dispatched = events(msgs.get(pid, []), "runner_dispatched")
+        assert any(m["recipient_id"] == pids[0] and m["arrive_at"] == plan.arrive_at for m in dispatched)
+    room.tick(plan.arrive_at)
+    msgs = inbox(room)
+    slips = events(msgs[pids[0]], "runner_slip")
+    assert [m["precise"] for m in slips] == [plan.clue.precise]
+    assert of_type(msgs[pids[0]], "you")[-1]["slips"][-1]["precise"] == plan.clue.precise
+    assert not events(msgs.get(pids[1], []), "runner_slip")
+    assert all(len(m["slips"]) == 1 or m["slips"][-1]["precise"] != plan.clue.precise
+               for m in of_type(msgs.get(pids[1], []), "you"))
+
+
+def test_seats_get_unique_badges_and_looks() -> None:
+    room = new_room()
+    for name in ("Gilda", "Gilda", "Barnaby", "!!"):
+        room.join(name, 0)
+    players = of_type(inbox(room)[next(iter(room.seats))], "room")[-1]["players"]
+    badges = [p["badge"] for p in players]
+    assert badges[0] == "GLD" and badges[2] == "BRN"
+    assert len(set(badges)) == 4 and all(len(b) == 3 for b in badges)
+    assert len({p["look"] for p in players}) == 4
+
+
+def test_market_names_who_is_quoting() -> None:
+    room, pids = started_room()
+    open_at = room._rs.round.open_at
+    room.handle(pids[0], {"type": "quote", "bid": 97, "bid_qty": 5, "ask": 103, "ask_qty": 5}, open_at + 10)
+    market = of_type(inbox(room)[pids[1]], "market")[-1]
+    assert market["quotes"][pids[0]] == {"bid": 97, "bid_qty": 5, "ask": 103, "ask_qty": 5}

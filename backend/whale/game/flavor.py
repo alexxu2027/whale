@@ -12,84 +12,113 @@ import random
 from .posterior import StateSpace, belief
 from .questions import Answer, RumorQ
 
-# Pools keyed by factor name, then sentiment.
+# Pools keyed by driver name, then the direction the answer moves the price.
+# Lines must work for any contract in the catalog.
 _FACTOR_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
-    "Authenticity": {
+    "Weather": {
         "up": (
-            "The maker's marks look genuine.",
-            "A guild seal is stamped on the base.",
-            "Your appraiser would stake her reputation on it.",
+            "Drought watch across the growing region. Keep it quiet.",
+            "Storms are hitting supply hard.",
+            "The weather desk says the season is turning ugly.",
         ),
         "down": (
-            "Something about the craftsmanship feels off.",
-            "The provenance papers have suspicious smudges.",
-            "A known forger went quiet when you asked about it.",
+            "Perfect weather all week. Supply looks great.",
+            "The rain came right on time.",
+            "Mild season. Nobody's worried about supply.",
         ),
         "flat": (
-            "The appraisers can't agree on whether it's genuine.",
-            "Half the marks look right. Half don't.",
+            "Weather's doing nothing interesting.",
+            "The forecast is mixed. Could go either way.",
         ),
     },
-    "Rarity": {
+    "Supply Report": {
         "up": (
-            "Only a handful like it were ever made.",
-            "The archives list no other in private hands.",
+            "The supply report is going to come in short.",
+            "Production numbers are worse than anyone thinks.",
         ),
         "down": (
-            "A merchant down the street has two more of these.",
-            "You've seen this design before. Several times.",
+            "The supply report is going to be huge.",
+            "Record production numbers are coming.",
         ),
         "flat": (
-            "Uncommon, but not unheard of.",
-            "The catalog lists a few, but nobody has seen them lately.",
+            "The supply report looks in line.",
+            "Nothing surprising in the supply numbers.",
         ),
     },
-    "Demand": {
+    "Export Demand": {
         "up": (
-            "Two noble houses have been asking about it.",
-            "Collectors are already crowding the viewing room.",
+            "Big export sale on the wire tonight.",
+            "Overseas buyers are back in force.",
         ),
         "down": (
-            "The royal collector is not interested.",
-            "Buyers walked past the display without stopping.",
+            "Exporters are cancelling orders.",
+            "Nobody overseas is buying.",
         ),
         "flat": (
-            "A few collectors have asked. None seemed desperate.",
-            "Interest is polite, nothing more.",
+            "The export desk says it's quiet.",
+            "Export business is steady. Nothing new.",
         ),
     },
-    "Condition": {
+    "Stockpiles": {
         "up": (
-            "Barely a scratch on it.",
-            "It's been kept in a velvet case for a century.",
+            "Warehouses are nearly empty.",
+            "Stocks are drawing down fast.",
         ),
         "down": (
-            "There's a crack you can see from across the room.",
-            "It smells faintly of swamp.",
+            "The elevators are full from here to Kansas.",
+            "Warehouses can't take any more.",
         ),
         "flat": (
-            "Some wear, as you'd expect for its age.",
-            "A few scuffs, nothing a polish won't hide.",
+            "Stockpiles are about normal.",
+            "Inventories haven't moved.",
+        ),
+    },
+    "Funds Flow": {
+        "up": (
+            "A big fund just got an order to go long.",
+            "The funds are buying everything in sight.",
+        ),
+        "down": (
+            "A big fund is liquidating.",
+            "The funds are dumping their positions.",
+        ),
+        "flat": (
+            "The funds are sitting on their hands.",
+            "No big money moving either way.",
+        ),
+    },
+    "Freight": {
+        "up": (
+            "Rail cars are stuck. Delivery is a mess.",
+            "Barge traffic halted on the river.",
+        ),
+        "down": (
+            "Freight is cheap and moving fast.",
+            "Plenty of trucks, no delays anywhere.",
+        ),
+        "flat": (
+            "Freight's running normally.",
+            "Shipping is on schedule.",
         ),
     },
 }
 
 _GENERAL_POOL: dict[str, tuple[str, ...]] = {
     "up": (
-        "A well-connected broker is quietly optimistic.",
-        "The auctioneer's assistant winked at you.",
+        "Your desk thinks this one's going up.",
+        "Your clerk says lean long.",
     ),
     "down": (
-        "A well-connected broker is quietly pessimistic.",
-        "The auctioneer's assistant avoided your eyes.",
+        "Your desk thinks this one's heading down.",
+        "Your clerk says lean short.",
     ),
     "flat": (
-        "The rumor mill is split.",
-        "Nobody on the floor will commit to a number.",
+        "Your desk can't call it.",
+        "Nobody on the phones will commit to a number.",
     ),
 }
 
-_RUMOR_PREFIXES = ("Overheard in a tavern:", "A street urchin swears:", "Word on the docks:")
+_RUMOR_PREFIXES = ("Overheard at the coffee stand:", "A runner from another booth swears:", "Word on the floor:")
 
 # Shift in expected value (points) needed before flavor turns positive/negative.
 _SENTIMENT_THRESHOLD = 0.75

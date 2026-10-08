@@ -84,11 +84,11 @@ def test_truthful_answers_are_true() -> None:
 
 
 def test_answer_text_examples() -> None:
-    assert Answer(ExactQ(2), 9).text(RECIPE) == "Demand = +4"
-    assert Answer(ExactQ(0), 5).text(RECIPE) == "Authenticity = 0"
-    assert Answer(SignQ(1), 1).text(RECIPE) == "Rarity is not negative"
-    assert Answer(TotalQ(105), 0).text(RECIPE) == "The hammer price is below 105"
-    assert Answer(RumorQ(SignQ(2), 70), 0).text(RECIPE) == "Rumor (70% reliable): Demand is negative"
+    assert Answer(ExactQ(2), 9).text(RECIPE) == "Export Demand = +4"
+    assert Answer(ExactQ(0), 5).text(RECIPE) == "Weather = 0"
+    assert Answer(SignQ(1), 1).text(RECIPE) == "Supply Report is not negative"
+    assert Answer(TotalQ(105), 0).text(RECIPE) == "The settlement price is below 105"
+    assert Answer(RumorQ(SignQ(2), 70), 0).text(RECIPE) == "Rumor (70% reliable): Export Demand is negative"
 
 
 # -- posteriors ---------------------------------------------------------------------

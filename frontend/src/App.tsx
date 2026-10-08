@@ -1,5 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useGame } from './game'
+import { markShot, shotSeen } from './pit/camera'
+import { Stage } from './pit/parts'
 import { Home } from './screens/Home'
 import { Lobby } from './screens/Lobby'
 import { Play } from './screens/Play'
@@ -9,6 +11,8 @@ export default function App() {
   const game = useGame()
   const { state } = game
   const solo = useRef(false)
+  // Rounds whose closing shot has played (the camera pulls back once per round).
+  const [closed, setClosed] = useState<Set<string>>(() => new Set())
 
   // "Play solo": as soon as we're the host of the new room, start with bots.
   useEffect(() => {
@@ -29,7 +33,11 @@ export default function App() {
   if (!state.room || state.connection === 'idle' || state.fatal) {
     const connecting = state.connection === 'connecting' && !state.fatal
     return connecting ? (
-      <div className="grid h-full place-items-center text-velvet-200">Finding the auction house…</div>
+      <Stage background="#0e0c0a">
+        <div className="led" style={{ display: 'grid', placeItems: 'center', height: '100%', fontSize: 36 }}>
+          WALKING ONTO THE FLOOR…
+        </div>
+      </Stage>
     ) : (
       <Home
         error={state.fatal}
@@ -42,6 +50,19 @@ export default function App() {
   }
   if (state.room.phase === 'lobby') return <Lobby game={game} />
   if ((state.room.phase === 'reveal' || state.room.phase === 'finished') && state.reveal) {
+    const key = `whale:close:${state.code}:${state.round?.opens_at ?? state.reveal.round_number}`
+    if (state.round && !closed.has(key) && !shotSeen(key)) {
+      return (
+        <Play
+          game={game}
+          closing
+          onClosed={() => {
+            markShot(key)
+            setClosed((s) => new Set(s).add(key))
+          }}
+        />
+      )
+    }
     return <Reveal game={game} reveal={state.reveal} />
   }
   return <Play game={game} />

@@ -28,6 +28,7 @@ from whale.bots.personalities import Personality
 from whale.bots.runner import BotRunner
 from whale.engine import (
     CENTS_PER_POINT,
+    Trade,
     CancelAll as EngineCancelAll,
     CancelOrder,
     CallPlayer,
@@ -41,8 +42,8 @@ from whale.engine import (
     SetQuote,
     Side,
 )
-from whale.game.items import Item, pick_item
-from whale.game.recipes import FOUR_CARDS, Recipe
+from whale.game.contracts import Contract, pick_contract
+from whale.game.recipes import PIT_SIX, Recipe
 from whale.game.round import Round, RoundConfig, RoundResult
 from whale.game.setup import new_seed
 from whale.runtime.visibility import is_visible
@@ -88,6 +89,8 @@ class Seat:
     personality: Personality | None = None  # None for humans
     token: str | None = None
     connected: bool = False
+    badge: str = ""  # 3-letter jacket badge, unique in the room (PRD §36.3)
+    look: int = 0  # index into the client's jacket palette
 
     @property
     def is_bot(self) -> bool:
@@ -97,7 +100,7 @@ class Seat:
 @dataclass(slots=True)
 class _RoundState:
     round: Round
-    item: Item
+    contract: Contract
     runner: BotRunner
     cursors: dict[str, int] = field(default_factory=dict)  # per human: index into round.log
     flushed_log_len: int = 0
@@ -109,7 +112,7 @@ class RoomCore:
         code: str,
         settings: RoomSettings | None = None,
         *,
-        recipe: Recipe = FOUR_CARDS,
+        recipe: Recipe = PIT_SIX,
         seed_fn: Callable[[], int] = new_seed,
     ) -> None:
         self.code = code
@@ -141,6 +144,7 @@ class RoomCore:
         pid = f"p{self._next_human}"
         self._next_human += 1
         seat = Seat(pid, name.strip() or "Player", token=secrets.token_urlsafe(18), connected=True)
+        self._dress(seat)
         self.seats[pid] = seat
         if self.host_id is None:
             self.host_id = pid
@@ -206,6 +210,9 @@ class RoomCore:
             bot_time = rs.runner.next_time()
             if bot_time is not None:
                 times.append(bot_time)
+            runner_time = rnd.next_scheduled()
+            if runner_time is not None:
+                times.append(runner_time)
             times += [c.deadline for c in rnd.exchange.calls.values()]
         return min(times) if times else None
 
@@ -274,7 +281,16 @@ class RoomCore:
         self._next_bot += 1
         used = {s.name for s in self.seats.values()}
         bot_name = next((b for b in BOT_NAMES if b not in used), f"Bot {pid}")
-        self.seats[pid] = Seat(pid, bot_name, personality=by_name[name])
+        seat = Seat(pid, bot_name, personality=by_name[name])
+        self._dress(seat)
+        self.seats[pid] = seat
+
+    def _dress(self, seat: Seat) -> None:
+        """Give a new seat a unique badge and the next jacket look."""
+        taken = {s.badge for s in self.seats.values()}
+        seat.badge = make_badge(seat.name, taken)
+        used = {s.look for s in self.seats.values()}
+        seat.look = next(i for i in range(64) if i not in used)
 
     def _trade(self, pid: str, msg: Any, now: int) -> None:
         if self.phase is not RoomPhase.PLAYING or self._rs is None:
@@ -363,7 +379,7 @@ class RoomCore:
         }
         self._rs = _RoundState(
             round=rnd,
-            item=pick_item(rng),
+            contract=pick_contract(rng),
             runner=BotRunner(rnd, bots, rng, start=now),
             cursors={pid: 0 for pid in self._humans()},
         )
@@ -439,6 +455,8 @@ class RoomCore:
                     "is_bot": s.is_bot,
                     "personality": s.personality.name if s.personality else None,
                     "connected": s.connected or s.is_bot,
+                    "badge": s.badge,
+                    "look": s.look,
                 }
                 for s in self.seats.values()
             ],
@@ -455,17 +473,18 @@ class RoomCore:
         cfg = rnd.exchange.config
         clue = rnd.setup.clues[pid]
         objective = rnd.objectives[pid]
+        c = rs.contract
         return {
             "type": "round_start",
             "round_number": self.round_number,
             "rounds": self.settings.rounds,
-            "item": {"name": rs.item.name, "unit": rs.item.unit, "description": rs.item.description},
+            "contract": {"name": c.name, "pit": c.pit, "description": c.description},
             "recipe": {
                 "title": self.recipe.title,
                 "description": self.recipe.describe(),
-                "factor_names": [c.name for c in self.recipe.components],
-                "min": self.recipe.min_value,
-                "max": self.recipe.max_value,
+                "factor_names": [comp.name for comp in self.recipe.components],
+                "min": self.recipe.price_min,
+                "max": self.recipe.price_max,
                 "average": cfg.reference,
             },
             "clue": {"flavor": clue.flavor, "precise": clue.precise},
@@ -484,6 +503,7 @@ class RoomCore:
                 "call_cooldown_ms": cfg.call_cooldown_ms,
                 "maker_rebate": cfg.maker_rebate_cents / CENTS_PER_POINT,
                 "taker_fee": cfg.taker_fee_cents / CENTS_PER_POINT,
+                "runner_travel_ms": rnd.config.runner_travel_ms,
             },
         }
 
@@ -499,7 +519,21 @@ class RoomCore:
             "bids": [] if sealed else ex.book.depth(Side.BUY, 10),
             "asks": [] if sealed else ex.book.depth(Side.SELL, 10),
             "mid": float(ex.config.reference) if sealed else rs.round.mid(),
+            "last": next((e.price for e in reversed(rs.round.log) if isinstance(e, Trade)), None),
+            "quotes": {} if sealed else self._public_quotes(rs),
         }
+
+    def _public_quotes(self, rs: _RoundState) -> dict[str, dict[str, int | None]]:
+        """Each player's market, as the pit would hear it shouted (PRD §36.4)."""
+        ex = rs.round.exchange
+        out: dict[str, dict[str, int | None]] = {}
+        for pid, (bid_id, ask_id) in ex.quotes.items():
+            bid = ex.book.get(bid_id) if bid_id is not None else None
+            ask = ex.book.get(ask_id) if ask_id is not None else None
+            if bid or ask:
+                out[pid] = {"bid": bid.price if bid else None, "bid_qty": bid.qty if bid else 0,
+                            "ask": ask.price if ask else None, "ask_qty": ask.qty if ask else 0}
+        return out
 
     def _you_message(self, rs: _RoundState, pid: str) -> dict[str, Any]:
         ex = rs.round.exchange
@@ -528,6 +562,7 @@ class RoomCore:
                 for o in sorted(ex.book.orders(), key=lambda o: o.order_id)
                 if o.player_id == pid and not o.is_quote
             ],
+            "slips": self._slips(rs, pid),
             "call": None
             if call is None
             else {
@@ -543,16 +578,51 @@ class RoomCore:
             "server_now": self._now,
         }
 
+    def _slips(self, rs: _RoundState, pid: str) -> list[dict[str, Any]]:
+        """The player's own slips, in the order they arrived."""
+        rnd = rs.round
+        start = rnd.setup.clues[pid]
+        out = [{"kind": "start", "flavor": start.flavor, "precise": start.precise, "ts": rnd.start_ts}]
+        arrived = {id(c) for c in rnd.delivered.get(pid, [])}
+        for plan in rnd.runners:
+            if plan.recipient == pid and id(plan.clue) in arrived:
+                out.append({"kind": "runner", "flavor": plan.clue.flavor, "precise": plan.clue.precise, "ts": plan.arrive_at})
+        return out
+
     def _reveal_message(self, rs: _RoundState, result: RoundResult) -> dict[str, Any]:
         names = {pid: s.name for pid, s in self.seats.items()}
+        badges = {pid: s.badge for pid, s in self.seats.items()}
+        trades = [e for e in rs.round.log if isinstance(e, Trade)]
+        by_id = {pr.player_id: pr for pr in result.players}
+        knew: dict[int, list[str]] = {i: [] for i in range(len(self.recipe.components))}
+        for pr in result.players:
+            for clue in (pr.clue, *pr.runner_clues):
+                for i in clue.answer.question.components:
+                    if badges.get(pr.player_id) not in knew[i]:
+                        knew[i].append(badges.get(pr.player_id, pr.player_id))
+
+        def tell(pr: Any) -> str | None:
+            # Only a loss worth mentioning (at least a point).
+            losses = {cp: v for cp, v in pr.attribution.adverse_by_counterparty.items() if v <= -CENTS_PER_POINT}
+            if not losses:
+                return None
+            cp, cents = min(losses.items(), key=lambda kv: kv[1])
+            hits = sum(1 for t in trades if t.maker_id == pr.player_id and t.taker_id == cp)
+            other = by_id.get(cp)
+            said = "; ".join(c.precise for c in (other.clue, *other.runner_clues)) if other else "?"
+            times = "once" if hits == 1 else f"{hits} times"
+            return f"{names.get(cp, cp)} traded against your market {times} and took {abs(cents) / CENTS_PER_POINT:.0f} off you. Their desk said: {said}."
+
         return {
             "type": "reveal",
             "round_number": self.round_number,
             "rounds": self.settings.rounds,
-            "item": {"name": rs.item.name, "unit": rs.item.unit},
+            "contract": {"name": rs.contract.name, "pit": rs.contract.pit},
             "final_value": result.final_value,
+            "trades": len(trades),
             "factors": [
-                {"name": c.name, "value": v} for c, v in zip(self.recipe.components, result.state, strict=True)
+                {"name": c.name, "value": v, "knew": knew[i]}
+                for i, (c, v) in enumerate(zip(self.recipe.components, result.state, strict=True))
             ],
             "players": [
                 {
@@ -563,7 +633,10 @@ class RoomCore:
                     "pnl": pr.pnl_cents / CENTS_PER_POINT,
                     "bonus": pr.bonus_cents / CENTS_PER_POINT,
                     "score": pr.score_cents / CENTS_PER_POINT,
+                    "badge": badges.get(pr.player_id, ""),
                     "clue": {"flavor": pr.clue.flavor, "precise": pr.clue.precise},
+                    "slips": [{"flavor": c.flavor, "precise": c.precise} for c in (pr.clue, *pr.runner_clues)],
+                    "tell": tell(pr),
                     "objective": {"title": pr.objective.title, "description": pr.objective.description,
                                   "bonus": pr.objective.bonus, "met": pr.objective_met},
                     "breakdown": {
@@ -583,3 +656,18 @@ class RoomCore:
             "match_scores": {pid: c / CENTS_PER_POINT for pid, c in self.scores.items()},
             "last_round": self.round_number >= self.settings.rounds,
         }
+
+
+def make_badge(name: str, taken: set[str]) -> str:
+    """A 3-letter badge from a name, the way floor badges read: first letter,
+    then consonants (Gilda -> GLD, Barnaby -> BRN). Made unique with a digit."""
+    letters = [ch for ch in name.upper() if "A" <= ch <= "Z"]
+    if not letters:
+        letters = list("TRD")
+    consonants = [ch for ch in letters[1:] if ch not in "AEIOU"]
+    base = (letters[0] + "".join(consonants) + "".join(letters[1:]) + "XXX")[:3]
+    badge, n = base, 2
+    while badge in taken:
+        badge = base[:2] + str(n)
+        n += 1
+    return badge

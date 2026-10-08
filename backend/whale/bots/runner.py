@@ -24,6 +24,7 @@ from dataclasses import replace
 
 from whale.engine import Command
 from whale.game.round import Round
+from whale.game.runners import RunnerSlip
 from whale.runtime.visibility import is_visible
 
 from .bot import Bot
@@ -77,6 +78,8 @@ class BotRunner:
             for e in rnd.log[self._cursors[pid] :]:
                 if is_visible(e, pid):
                     bot.observe(e)
+                    if isinstance(e, RunnerSlip) and e.player_id == pid:
+                        bot.receive_clue(rnd.runner_clue(e.runner_id))  # the bot's own slip
             self._cursors[pid] = len(rnd.log)
             decided = bot.act(build_view(rnd.exchange, pid, t))
             heapq.heappush(self._queue, (t + bot.think_time(), 0, next(self._counter), pid, decided))

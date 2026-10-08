@@ -1,8 +1,18 @@
+// The settlement ledger (PRD §16): how the price settled and who knew which
+// part of it, where your P&L came from, the floor's results, and the tell
+// you missed.
+
+import type { ReactNode } from 'react'
 import type { Game } from '../game'
 import { useTicker } from '../game'
 import type { RevealMsg, RevealPlayer } from '../types'
-import { Button, Card, Pill } from '../ui'
-import { cx, gold, secondsLeft } from '../format'
+import { boardName, clock, signed } from '../pit/format'
+import { Stage } from '../pit/parts'
+import { playerLook } from '../pit/sprites'
+
+const BLUE = '#8fb0ff'
+const ORANGE = '#e08a3c'
+const tone = (v: number) => (Math.round(v) > 0 ? BLUE : Math.round(v) < 0 ? ORANGE : '#d9d4c3')
 
 export function Reveal({ game, reveal }: { game: Game; reveal: RevealMsg }) {
   useTicker(500)
@@ -11,142 +21,178 @@ export function Reveal({ game, reveal }: { game: Game; reveal: RevealMsg }) {
   const isHost = room.host_id === state.me
   const me = reveal.players.find((p) => p.id === state.me)
   const finished = room.phase === 'finished'
-  const standings = [...room.players].sort((a, b) => (room.scores[b.id] ?? 0) - (room.scores[a.id] ?? 0))
-  const nextIn = room.reveal_until !== null ? secondsLeft(room.reveal_until, game.serverNow()) : null
+  const lookOf = (id: string) => playerLook(room.players.find((p) => p.id === id)?.look ?? 0)
+  const nextIn = room.reveal_until !== null ? room.reveal_until - game.serverNow() : null
 
   return (
-    <main className="mx-auto flex min-h-full max-w-4xl flex-col gap-4 px-4 py-6">
-      <Card className="pop-in text-center">
-        <div className="text-xs font-extrabold uppercase tracking-widest text-velvet-400">
-          {reveal.item.name} · round {reveal.round_number} of {reveal.rounds}
+    <Stage background="#0e0c0a">
+      <div style={{ position: 'absolute', inset: 0, boxSizing: 'border-box', padding: '28px 56px', color: '#d9d4c3', display: 'grid', gridTemplateColumns: '700px minmax(0, 1fr)', gap: 56 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <div className="silk" style={{ fontSize: 15, color: '#8c8676' }}>
+              SETTLEMENT · {boardName(reveal.contract.name)} · PIT {reveal.contract.pit} · ROUND {reveal.round_number} OF {reveal.rounds}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 20, marginTop: 6 }}>
+              <div className="led" style={{ fontSize: 104, lineHeight: 1 }}>{reveal.final_value}</div>
+              <div style={{ fontSize: 22, color: '#b5ae9b' }}>
+                final settlement price
+                <br />
+                <span style={{ fontSize: 16 }}>{reveal.trades} trades on the floor</span>
+              </div>
+            </div>
+          </div>
+
+          <Section title="HOW IT SETTLED">
+            <Line name="Base" value="100" />
+            {reveal.factors.map((f) => {
+              const mine = me && f.knew.includes(me.badge)
+              const others = f.knew.filter((b) => b !== me?.badge)
+              const who = [mine ? 'you' : null, ...others].filter(Boolean).join(', ')
+              return (
+                <Line
+                  key={f.name}
+                  name={f.name}
+                  who={who ? `${who} knew` : 'nobody knew'}
+                  whoColor={mine ? '#ffb43a' : '#8c8676'}
+                  value={signed(f.value)}
+                  color={tone(f.value)}
+                />
+              )
+            })}
+          </Section>
+
+          {me && <Book me={me} reveal={reveal} />}
         </div>
-        <div className="font-display text-2xl text-velvet-200">Hammer price</div>
-        <div className="font-display text-8xl text-gold-400 drop-shadow-[0_4px_0_rgba(0,0,0,0.4)]">{reveal.final_value}</div>
-        <div className="mt-2 flex flex-wrap justify-center gap-2 text-sm">
-          <span className="text-velvet-400">100</span>
-          {reveal.factors.map((f) => (
-            <span key={f.name} className="rounded-lg bg-velvet-950/50 px-2 py-0.5">
-              {f.name} <b className={f.value > 0 ? 'text-buy-400' : f.value < 0 ? 'text-sell-400' : ''}>{gold(f.value)}</b>
-            </span>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', minWidth: 0 }}>
+          <div className="silk" style={{ fontSize: 14, color: '#8c8676', borderBottom: '3px solid #3a362e', paddingBottom: 6 }}>
+            THE FLOOR · WHO KNEW WHAT
+          </div>
+          {reveal.players.map((p) => (
+            <FloorCard key={p.id} p={p} me={p.id === state.me} look={lookOf(p.id)} match={finished || reveal.last_round ? reveal.match_scores[p.id] : undefined} />
           ))}
-        </div>
-      </Card>
 
-      {me && <Breakdown me={me} />}
+          <div style={{ marginTop: 4, padding: '12px 16px', background: '#1b1814', border: '3px solid #3a362e', fontSize: 17, lineHeight: 1.4 }}>
+            <span className="silk" style={{ fontSize: 13, color: '#ffb43a' }}>THE TELL YOU MISSED</span>
+            <br />
+            {me?.tell ?? 'Nobody picked you off this round. Whoever traded with your market didn’t know more than you did.'}
+          </div>
 
-      <Card title="Who knew what">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[34rem] text-left text-sm">
-            <thead className="text-xs uppercase tracking-wider text-velvet-400">
-              <tr>
-                <th className="py-1">#</th>
-                <th>Merchant</th>
-                <th>Their clue</th>
-                <th>Objective</th>
-                <th className="text-right">Trading</th>
-                <th className="text-right">Bonus</th>
-                <th className="text-right">Round</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reveal.players.map((p) => (
-                <tr key={p.id} className={cx('border-t border-velvet-700', p.id === state.me && 'bg-gold-400/10')}>
-                  <td className="py-2 font-display text-lg">{p.rank}</td>
-                  <td className="font-semibold">
-                    {p.name}
-                    <div className="text-xs font-normal text-velvet-400">ended {p.position > 0 ? `+${p.position}` : p.position}</div>
-                  </td>
-                  <td className="font-mono text-xs text-gold-300">{p.clue.precise}</td>
-                  <td>
-                    <span className="font-semibold">{p.objective.title}</span>{' '}
-                    {p.objective.met ? <Pill className="bg-buy-400/20 text-buy-400">done</Pill> : <Pill className="bg-velvet-700 text-velvet-400">missed</Pill>}
-                  </td>
-                  <td className={cx('text-right font-semibold', p.pnl >= 0 ? 'text-buy-400' : 'text-sell-400')}>{gold(Math.round(p.pnl))}</td>
-                  <td className="text-right text-gold-300">{p.bonus ? `+${p.bonus}` : '—'}</td>
-                  <td className="text-right font-display text-lg">{gold(Math.round(p.score))}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+          <div
+            className="silk"
+            style={{ position: 'absolute', right: 10, top: 300, padding: '8px 18px', border: '6px solid #a8322d', color: '#a8322d', fontSize: 46, letterSpacing: 2, transform: 'rotate(-8deg)', opacity: 0.9, animation: 'thud .35s ease-out 0.4s both', pointerEvents: 'none' }}
+          >
+            SETTLED
+          </div>
 
-      <Card title={finished ? 'Final standings' : 'Match standings'}>
-        <ol className="flex flex-col gap-1">
-          {standings.map((p, i) => (
-            <li key={p.id} className="flex justify-between">
-              <span>
-                <span className="mr-2 font-display text-gold-400">{i + 1}.</span>
-                {p.name}
-                {p.id === state.me && ' (you)'}
-              </span>
-              <span className="font-bold">{gold(Math.round(room.scores[p.id] ?? 0))}</span>
-            </li>
-          ))}
-        </ol>
-      </Card>
-
-      <div className="flex flex-wrap items-center justify-center gap-3 pb-6">
-        {finished ? (
-          isHost ? (
-            <Button tone="gold" onClick={() => send({ type: 'rematch' })}>
-              Rematch
-            </Button>
-          ) : (
-            <span className="text-velvet-200">Waiting for the host to start a rematch…</span>
-          )
-        ) : (
-          <>
-            <span className="text-velvet-200">Next round in {nextIn ?? '…'}s</span>
-            {isHost && (
-              <Button tone="gold" onClick={() => send({ type: 'next_round' })}>
-                Start now
-              </Button>
+          <div style={{ flex: 1 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div className="led" style={{ flex: 1, padding: '12px 14px', background: '#0b0906', border: '3px solid #000', fontSize: 20 }}>
+              {finished ? 'MATCH OVER · FINAL STANDINGS ABOVE' : nextIn !== null ? `NEXT BELL IN ${clock(nextIn)}` : 'NEXT BELL SOON'}
+            </div>
+            {finished && isHost && (
+              <Big onClick={() => send({ type: 'rematch' })}>REMATCH</Big>
             )}
-          </>
-        )}
-        <Button tone="ghost" onClick={game.leave}>
-          Leave
-        </Button>
+            {!finished && isHost && <Big onClick={() => send({ type: 'next_round' })}>TO THE PIT</Big>}
+            <Big ghost onClick={game.leave}>LEAVE</Big>
+          </div>
+        </div>
       </div>
-    </main>
+    </Stage>
   )
 }
 
-function Breakdown({ me }: { me: RevealPlayer }) {
-  const b = me.breakdown
-  const lostTo = Object.entries(b.lost_to)
-  const line = (label: string, value: number, hint: string) => (
-    <div className="flex items-baseline justify-between gap-4 py-1">
-      <div>
-        <div className="font-semibold">{label}</div>
-        <div className="text-xs text-velvet-400">{hint}</div>
-      </div>
-      <div className={cx('font-display text-2xl', value >= 0 ? 'text-buy-400' : 'text-sell-400')}>{gold(Math.round(value))}</div>
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section>
+      <div className="silk" style={{ fontSize: 14, color: '#8c8676', borderBottom: '3px solid #3a362e', paddingBottom: 6 }}>{title}</div>
+      {children}
+    </section>
+  )
+}
+
+function Line({ name, value, color = '#d9d4c3', who, whoColor }: { name: string; value: string; color?: string; who?: string; whoColor?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '3px 0', fontSize: 19 }}>
+      <span>{name}</span>
+      <span style={{ flex: 1, borderBottom: '3px dotted #3a362e', transform: 'translateY(-5px)' }} />
+      {who && <span style={{ fontSize: 15, color: whoColor }}>{who}</span>}
+      <span style={{ minWidth: 52, textAlign: 'right', fontWeight: 700, color }}>{value}</span>
     </div>
   )
+}
+
+function Book({ me, reveal }: { me: RevealPlayer; reveal: RevealMsg }) {
+  const b = me.breakdown
+  const worst = Object.entries(b.lost_to)[0]?.[0]
+  const worstBadge = reveal.players.find((p) => p.name === worst)?.badge
   return (
-    <Card title="Your round" accent="text-gold-400">
-      {line('Earned from your gap', b.spread, 'Buying below and selling above the market at the time')}
-      {line(
-        b.adverse_selection < 0 ? 'Lost to better-informed players' : 'Won from less-informed players',
-        b.adverse_selection,
-        lostTo.length
-          ? `Mostly ${lostTo.map(([n, v]) => `${n} (${Math.round(v)})`).join(', ')}`
-          : 'How the price moved after others traded with your market',
-      )}
-      {line('Your own bets', b.directional, 'Trades you chose to make, valued at the hammer price')}
-      {Math.abs(b.fees) >= 0.5 && line('Fees and rebates', b.fees, 'Paid for taking, earned for posting')}
-      <div className="mt-2 flex justify-between border-t border-velvet-600 pt-2 font-bold">
-        <span>Trading P&amp;L</span>
-        <span>{gold(Math.round(me.pnl))}</span>
+    <Section title="YOUR BOOK">
+      <Line name="Earned on your quotes" value={signed(b.spread)} color={tone(b.spread)} />
+      <Line
+        name={Math.round(b.adverse_selection) < 0 ? `Lost to traders who knew more${worstBadge ? ` (mostly ${worstBadge})` : ''}` : Math.round(b.adverse_selection) > 0 ? 'Won from traders who knew less' : 'Lost to traders who knew more'}
+        value={signed(b.adverse_selection)}
+        color={tone(b.adverse_selection)}
+      />
+      <Line name="Your own trades" value={signed(b.directional)} color={tone(b.directional)} />
+      <Line name="Fees and rebates" value={signed(b.fees)} color={tone(b.fees)} />
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 0 0', marginTop: 4, borderTop: '3px solid #d9d4c3', fontSize: 26, fontWeight: 700 }}>
+        <span>TRADING TOTAL</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: tone(me.pnl) }}>{signed(me.pnl)}</span>
       </div>
-      <div className="flex justify-between text-sm text-velvet-200">
-        <span>
-          {me.objective.title}: {me.objective.met ? 'completed' : 'missed'}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, paddingTop: 8, fontSize: 18, color: '#b5ae9b' }}>
+        <span>Standing order: {me.objective.description}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: me.objective.met ? BLUE : ORANGE, whiteSpace: 'nowrap' }}>
+          {me.objective.met ? `DONE · +${me.bonus}` : 'MISSED · +0'}
         </span>
-        <span>{me.bonus ? `+${me.bonus}` : '+0'}</span>
       </div>
-    </Card>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, paddingTop: 6, fontSize: 18 }}>
+        <span>Ended holding {signed(me.position)} · round score</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontWeight: 700, color: tone(me.score) }}>{signed(me.score)}</span>
+      </div>
+    </Section>
+  )
+}
+
+function FloorCard({ p, me, look, match }: { p: RevealPlayer; me: boolean; look: ReturnType<typeof playerLook>; match?: number }) {
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px', background: '#d9d4c3', color: '#16130f', border: '3px solid #16130f',
+        boxShadow: '5px 5px 0 #000', outline: me ? '3px solid #ffb43a' : undefined, outlineOffset: 3,
+      }}
+    >
+      <div className="led" style={{ width: 28, fontSize: 30, color: '#16130f' }}>{p.rank}</div>
+      <div className="silk" style={{ padding: '2px 8px', fontSize: 16, background: look.jacket, color: look.fg, border: '2px solid #16130f' }}>
+        {me ? 'YOU' : p.badge}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 17, fontWeight: 700 }}>{p.slips.map((s) => s.precise).join(' · ')}</div>
+        <div style={{ fontSize: 14, color: '#6b665a' }}>
+          {p.name} · ended {p.position === 0 ? 'flat' : `${p.position > 0 ? 'long' : 'short'} ${Math.abs(p.position)}`} · {p.objective.title}{' '}
+          {p.objective.met ? `done +${p.bonus}` : 'missed'}
+        </div>
+      </div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontSize: 26, fontWeight: 700, color: p.score >= 0 ? '#24418c' : '#b5501f' }}>{signed(p.score)}</div>
+        {match !== undefined && <div style={{ fontSize: 13 }}>match {signed(match)}</div>}
+      </div>
+    </div>
+  )
+}
+
+function Big({ children, onClick, ghost }: { children: ReactNode; onClick: () => void; ghost?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="silk"
+      style={{ minHeight: 52, padding: '0 20px', border: '4px solid #d9d4c3', background: ghost ? 'transparent' : '#d9d4c3', color: ghost ? '#d9d4c3' : '#0e0c0a', fontSize: 18, boxShadow: '4px 4px 0 #3a362e' }}
+    >
+      {children}
+    </button>
   )
 }

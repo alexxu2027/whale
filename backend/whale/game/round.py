@@ -37,6 +37,7 @@ from .dealing import Clue
 from .objectives import Objective, ObjectiveContext, deal_objectives
 from .posterior import state_space
 from .recipes import Recipe
+from .runners import RunnerArrived, RunnerDispatched, RunnerPlan, RunnerSlip, plan_runners
 from .setup import Dealing, RoundSetup, new_seed, setup_round
 
 
@@ -51,6 +52,8 @@ class RoundConfig:
     opening_ms: int = 10_000
     trading_ms: int = 180_000
     dealing: Dealing = Dealing.ONE_CARD_EACH
+    runners: bool = True  # only has an effect on recipes with runner-only drivers (PRD §7.7)
+    runner_travel_ms: int = 2_000  # how long the runner is visible crossing the floor
     # Price band and reference price are overridden from the recipe.
     market: MarketConfig = field(default_factory=MarketConfig)
 
@@ -63,6 +66,7 @@ class PlayerResult:
     position: int
     cash_cents: int
     clue: Clue
+    runner_clues: tuple[Clue, ...]
     objective: Objective
     objective_met: bool
     attribution: Attribution
@@ -104,13 +108,14 @@ class Round:
         root = random.Random(self.seed)
         setup_seed, exchange_seed = root.getrandbits(64), root.getrandbits(64)
         objective_seed = root.getrandbits(64)
+        runner_seed = root.getrandbits(64)
 
         self.setup: RoundSetup = setup_round(recipe, players, setup_seed, self.config.dealing)
         self.objectives: dict[str, Objective] = deal_objectives(players, random.Random(objective_seed))
         market = replace(
             self.config.market,
-            price_min=recipe.min_value,
-            price_max=recipe.max_value,
+            price_min=recipe.price_min,
+            price_max=recipe.price_max,
             reference_price=round(state_space(recipe).prior_belief.mean),
         )
         self.exchange = Exchange(market, players, status=MarketStatus.PRE_OPEN, seed=exchange_seed)
@@ -123,6 +128,23 @@ class Round:
         self.trade_mids: dict[int, float] = {}
         self._last_trade_price: int | None = None
         self._now = start_ts
+
+        # Runners (PRD §7.7): planned up front from separate random streams, so
+        # choosing questions and times never depends on the hidden state.
+        self.runners: list[RunnerPlan] = []
+        if self.config.runners:
+            rr = random.Random(runner_seed)
+            q_rng, a_rng, f_rng = (random.Random(rr.getrandbits(64)) for _ in range(3))
+            self.runners = plan_runners(
+                recipe, players, self.setup.state, self.open_at, self.close_at,
+                self.config.runner_travel_ms, q_rng, a_rng, f_rng,
+            )
+        self._runner_events = sorted(
+            [(r.dispatch_at, 0, r) for r in self.runners] + [(r.arrive_at, 1, r) for r in self.runners],
+            key=lambda e: (e[0], e[1], e[2].runner_id),
+        )
+        self._runner_cursor = 0
+        self.delivered: dict[str, list[Clue]] = {p: [] for p in players}
 
     @property
     def phase(self) -> Phase:
@@ -142,6 +164,7 @@ class Round:
         out: list[Event] = []
         if self.exchange.status is MarketStatus.PRE_OPEN and now >= self.open_at:
             out += self._apply(SetStatus(ts=self.open_at, status=MarketStatus.OPEN))
+        out += self._run_runners(min(now, self.close_at - 1))
         if self.exchange.status is not MarketStatus.CLOSED:
             if now >= self.close_at:
                 out += self._apply(SetStatus(ts=self.close_at, status=MarketStatus.CLOSED))
@@ -157,6 +180,43 @@ class Round:
             raise ValueError("market status and time are controlled by the round")
         out = self.advance(command.ts)
         return out + self._apply(command)
+
+    def next_scheduled(self) -> int | None:
+        """The next runner movement, if one is due before the close."""
+        if self._runner_cursor < len(self._runner_events):
+            ts = self._runner_events[self._runner_cursor][0]
+            if ts < self.close_at:
+                return ts
+        return None
+
+    def runner_clue(self, runner_id: int) -> Clue:
+        return next(r.clue for r in self.runners if r.runner_id == runner_id)
+
+    def information(self, player: str) -> list[Clue]:
+        """Everything the player has been told so far: starting slip, then runners."""
+        return [self.setup.clues[player], *self.delivered[player]]
+
+    def _run_runners(self, limit: int) -> list[Event]:
+        out: list[Event] = []
+        while self._runner_cursor < len(self._runner_events) and self._runner_events[self._runner_cursor][0] <= limit:
+            ts, kind, plan = self._runner_events[self._runner_cursor]
+            self._runner_cursor += 1
+            if self.exchange.status is MarketStatus.CLOSED:
+                continue
+            out += self._apply(Tick(ts=ts))  # deadlines due before the runner, in order
+            if kind == 0:
+                out.append(self._record(RunnerDispatched, ts, runner_id=plan.runner_id, recipient_id=plan.recipient, arrive_at=plan.arrive_at))
+            else:
+                self.delivered[plan.recipient].append(plan.clue)
+                out.append(self._record(RunnerArrived, ts, runner_id=plan.runner_id, recipient_id=plan.recipient))
+                out.append(self._record(RunnerSlip, ts, runner_id=plan.runner_id, player_id=plan.recipient,
+                                        flavor=plan.clue.flavor, precise=plan.clue.precise))
+        return out
+
+    def _record(self, cls: type[Event], ts: int, **fields: object) -> Event:
+        event = self.exchange.record(cls, ts, **fields)
+        self.log.append(event)
+        return event
 
     def mid(self) -> float:
         """Middle of the book; else the last trade price; else the reference price."""
@@ -196,6 +256,7 @@ class Round:
                     position=s.position,
                     cash_cents=s.cash_cents,
                     clue=self.setup.clues[s.player_id],
+                    runner_clues=tuple(self.delivered[s.player_id]),
                     objective=objective,
                     objective_met=objective.check(ctx),
                     attribution=attribution[s.player_id],

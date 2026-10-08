@@ -196,6 +196,15 @@ class Exchange:
         out, self._out = self._out, []
         return out
 
+    def record(self, cls: type[Event], ts: int, **fields: Any) -> Event:
+        """Emit a game-level event (e.g. a runner) on the exchange's sequence,
+        so the room's log has one ordering. Changes no market state."""
+        self._ts = ts
+        saved, self._out = self._out, []
+        self._emit(cls, **fields)
+        event, self._out = self._out[0], saved
+        return event
+
     def settle(self, final_value: int) -> dict[str, Settlement]:
         if self.status is not MarketStatus.CLOSED:
             raise RuntimeError("settle requires a closed market")
