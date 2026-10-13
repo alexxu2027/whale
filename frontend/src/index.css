@@ -3,7 +3,7 @@
 /* The pit (PRD §36): a fixed 1440x900 stage drawn in chunky pixels, paper on a
    walnut desk, and amber LED for anything the exchange publishes. */
 @theme {
-  --font-pixel: "Pixelify Sans", ui-monospace, monospace;
+  --font-pixel: "DotGothic16", ui-monospace, monospace;
   --font-silk: "Silkscreen", ui-monospace, monospace;
   --font-led: "Doto", ui-monospace, monospace;
 
