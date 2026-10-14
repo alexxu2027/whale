@@ -23,6 +23,9 @@ export function Reveal({ game, reveal }: { game: Game; reveal: RevealMsg }) {
   const finished = room.phase === 'finished'
   const lookOf = (id: string) => playerLook(room.players.find((p) => p.id === id)?.look ?? 0)
   const nextIn = room.reveal_until !== null ? room.reveal_until - game.serverNow() : null
+  // Up to 8 traders share the column: past 5, cards tighten up to fit.
+  const compact = reveal.players.length > 5
+  const slipLines = Math.max(1, ...reveal.players.map((p) => p.slips.length))
 
   return (
     <Stage background="#0e0c0a">
@@ -64,12 +67,12 @@ export function Reveal({ game, reveal }: { game: Game; reveal: RevealMsg }) {
           {me && <Book me={me} reveal={reveal} />}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', minWidth: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 8 : 12, position: 'relative', minWidth: 0 }}>
           <div className="silk" style={{ fontSize: 14, color: '#8c8676', borderBottom: '3px solid #3a362e', paddingBottom: 6 }}>
             THE FLOOR · WHO KNEW WHAT
           </div>
           {reveal.players.map((p) => (
-            <FloorCard key={p.id} p={p} me={p.id === state.me} look={lookOf(p.id)} match={finished || reveal.last_round ? reveal.match_scores[p.id] : undefined} />
+            <FloorCard key={p.id} p={p} me={p.id === state.me} look={lookOf(p.id)} compact={compact} slipLines={slipLines} match={finished || reveal.last_round ? reveal.match_scores[p.id] : undefined} />
           ))}
 
           <div style={{ marginTop: 4, padding: '12px 16px', background: '#1b1814', border: '3px solid #3a362e', fontSize: 17, lineHeight: 1.4 }}>
@@ -78,17 +81,20 @@ export function Reveal({ game, reveal }: { game: Game; reveal: RevealMsg }) {
             {me?.tell ?? 'Nobody picked you off this round. Whoever traded with your market didn’t know more than you did.'}
           </div>
 
-          <div
-            className="silk"
-            style={{ position: 'absolute', right: 10, top: 300, padding: '8px 18px', border: '6px solid #a8322d', color: '#a8322d', fontSize: 46, letterSpacing: 2, transform: 'rotate(-8deg)', opacity: 0.9, animation: 'thud .35s ease-out 0.4s both', pointerEvents: 'none' }}
-          >
-            SETTLED
+          {/* The stamp lands in the free space under the cards, never on them. */}
+          <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+            {!compact && (
+              <div
+                className="silk"
+                style={{ padding: '8px 18px', border: '6px solid #a8322d', color: '#a8322d', fontSize: 46, letterSpacing: 2, transform: 'rotate(-8deg)', opacity: 0.9, animation: 'thud .35s ease-out 0.4s both', pointerEvents: 'none' }}
+              >
+                SETTLED
+              </div>
+            )}
           </div>
-
-          <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div className="led" style={{ flex: 1, padding: '12px 14px', background: '#0b0906', border: '3px solid #000', fontSize: 20 }}>
-              {finished ? 'MATCH OVER · FINAL STANDINGS ABOVE' : nextIn !== null ? `NEXT BELL IN ${clock(nextIn)}` : 'NEXT BELL SOON'}
+            <div className="led" style={{ flex: 1, padding: '12px 14px', background: '#0b0906', border: '3px solid #000', fontSize: 20, whiteSpace: 'nowrap' }}>
+              {finished ? 'MATCH OVER' : nextIn !== null ? `NEXT BELL IN ${clock(nextIn)}` : 'NEXT BELL SOON'}
             </div>
             {finished && isHost && (
               <Big onClick={() => send({ type: 'rematch' })}>REMATCH</Big>
@@ -157,11 +163,14 @@ function Book({ me, reveal }: { me: RevealPlayer; reveal: RevealMsg }) {
   )
 }
 
-function FloorCard({ p, me, look, match }: { p: RevealPlayer; me: boolean; look: ReturnType<typeof playerLook>; match?: number }) {
+const oneLine = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as const
+
+function FloorCard({ p, me, look, match, compact, slipLines }: { p: RevealPlayer; me: boolean; look: ReturnType<typeof playerLook>; match?: number; compact: boolean; slipLines: number }) {
+  const slipSize = compact ? 14 : 17
   return (
     <div
       style={{
-        display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px', background: '#d9d4c3', color: '#16130f', border: '3px solid #16130f',
+        display: 'flex', alignItems: 'center', gap: 14, padding: compact ? '4px 12px' : '10px 14px', background: '#d9d4c3', color: '#16130f', border: '3px solid #16130f',
         boxShadow: '5px 5px 0 #000', outline: me ? '3px solid #ffb43a' : undefined, outlineOffset: 3,
       }}
     >
@@ -169,16 +178,23 @@ function FloorCard({ p, me, look, match }: { p: RevealPlayer; me: boolean; look:
       <div className="silk" style={{ padding: '2px 8px', fontSize: 16, background: look.jacket, color: look.fg, border: '2px solid #16130f' }}>
         {me ? 'YOU' : p.badge}
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 17, fontWeight: 700 }}>{p.slips.map((s) => s.precise).join(' · ')}</div>
-        <div style={{ fontSize: 14, color: '#6b665a' }}>
+      <div style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>
+        {/* One clue per line, and room for as many lines as anyone has, so every card is the same height. */}
+        <div style={{ fontSize: slipSize, minHeight: slipLines * slipSize * 1.25 }}>
+          {p.slips.map((s, i) => (
+            <div key={i} style={oneLine} title={s.precise}>
+              {s.precise}
+            </div>
+          ))}
+        </div>
+        <div style={{ ...oneLine, fontSize: compact ? 12 : 14, color: '#6b665a' }}>
           {p.name} · ended {p.position === 0 ? 'flat' : `${p.position > 0 ? 'long' : 'short'} ${Math.abs(p.position)}`} · {p.objective.title}{' '}
           {p.objective.met ? `done +${p.bonus}` : 'missed'}
         </div>
       </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: 26, fontWeight: 700, color: p.score >= 0 ? '#24418c' : '#b5501f' }}>{signed(p.score)}</div>
-        {match !== undefined && <div style={{ fontSize: 13 }}>match {signed(match)}</div>}
+      <div style={{ textAlign: 'right', lineHeight: 1.1 }}>
+        <div style={{ fontSize: compact ? 22 : 26, color: p.score >= 0 ? '#24418c' : '#b5501f' }}>{signed(p.score)}</div>
+        {match !== undefined && <div style={{ fontSize: compact ? 12 : 13, whiteSpace: 'nowrap' }}>match {signed(match)}</div>}
       </div>
     </div>
   )

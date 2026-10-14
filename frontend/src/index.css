@@ -1,9 +1,28 @@
 @import "tailwindcss";
 
+/* Body text: Jersey 10, a proportional pixel face with distinct 2/5/S/Z.
+   Its letters run small for their size, so it is scaled once here
+   (size-adjust) to the x-height the layouts were drawn for; the LED and
+   label fonts are unaffected. Same files Google Fonts serves. */
+@font-face {
+  font-family: "Whale Text";
+  font-display: swap;
+  size-adjust: 135%;
+  src: url(https://fonts.gstatic.com/s/jersey10/v4/GftH7vZKsggXMf9n_J5n_5jh.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Whale Text";
+  font-display: swap;
+  size-adjust: 135%;
+  src: url(https://fonts.gstatic.com/s/jersey10/v4/GftH7vZKsggXMf9n_J5n8Zjh-1w.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 /* The pit (PRD §36): a fixed 1440x900 stage drawn in chunky pixels, paper on a
    walnut desk, and amber LED for anything the exchange publishes. */
 @theme {
-  --font-pixel: "DotGothic16", ui-monospace, monospace;
+  --font-pixel: "Whale Text", ui-monospace, monospace;
   --font-silk: "Silkscreen", ui-monospace, monospace;
   --font-led: "Doto", ui-monospace, monospace;
 
@@ -38,6 +57,7 @@ body {
   color: var(--color-ink);
   font-family: var(--font-pixel);
   font-feature-settings: "tnum" 1;
+  font-synthesis-weight: none; /* Jersey has one weight; a smeared fake bold reads worse */
   -webkit-font-smoothing: none;
   overflow: hidden;
 }

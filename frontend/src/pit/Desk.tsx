@@ -74,7 +74,8 @@ function SlipCard({ round, slip, n, behind, offset, onClick }: { round: RoundSta
       style={{
         position: 'absolute', left: 24 + offset, top: 22 - offset, width: 300, height: 236, padding: '12px 14px',
         background: runner ? '#e9e4d4' : '#e4dfcd', cursor: onClick ? 'pointer' : undefined, transform: behind ? 'rotate(-2deg)' : undefined,
-        backgroundImage: 'linear-gradient(180deg, transparent 49%, rgba(43,36,24,.18) 49%, rgba(43,36,24,.18) 51%, transparent 51%)',
+        // The fold sits below the writing, so a two-line quote never runs into it.
+        backgroundImage: 'linear-gradient(180deg, transparent 84%, rgba(43,36,24,.18) 84%, rgba(43,36,24,.18) 85%, transparent 85%)',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '3px solid #2b2418', paddingBottom: 4 }}>

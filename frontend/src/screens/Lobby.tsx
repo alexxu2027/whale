@@ -12,7 +12,7 @@ export function Lobby({ game }: { game: Game }) {
   const link = `${location.origin}/?room=${room.code}`
   const [copied, setCopied] = useState(false)
   const n = room.players.length
-  const field = { height: 40, fontSize: 18, border: '3px solid #2b2418', background: '#e9e4d4', fontFamily: 'var(--font-pixel)' }
+  const field = { height: 40, fontSize: 18, padding: '0 6px', border: '3px solid #2b2418', background: '#e9e4d4', fontFamily: 'var(--font-pixel)' }
 
   return (
     <Backdrop>
