@@ -45,6 +45,10 @@ def test_two_players_join_start_and_trade(client: TestClient) -> None:
         read_until(guest, "welcome")
 
         host.send_json({"type": "start", "fill_bots": True})
+        read_until(host, "briefing")
+        read_until(guest, "briefing")
+        host.send_json({"type": "ready"})
+        guest.send_json({"type": "ready"})  # the bell waits for both
         start = read_until(host, "round_start")
         assert start["clue"]["precise"] and start["objective"]["title"]
         room = read_until(guest, "room")

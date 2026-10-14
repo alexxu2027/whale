@@ -65,6 +65,18 @@ class Start(_Msg):
     fill_bots: bool = False  # fill empty seats up to 4 players
 
 
+class Ready(_Msg):
+    """Done reading the briefing; the bell rings once every connected human is ready."""
+
+    type: Literal["ready"]
+
+
+class Begin(_Msg):
+    """Host only: ring the bell without waiting for everyone to be ready."""
+
+    type: Literal["begin"]
+
+
 class NextRound(_Msg):
     type: Literal["next_round"]
 
@@ -127,6 +139,8 @@ ClientMessage = Annotated[
     | RemovePlayer
     | UpdateSettings
     | Start
+    | Ready
+    | Begin
     | NextRound
     | Rematch
     | Quote

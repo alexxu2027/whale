@@ -1,7 +1,7 @@
 // Server -> client messages (see backend/whale/multiplayer/room.py).
 
 export type Side = 'buy' | 'sell'
-export type Phase = 'lobby' | 'playing' | 'reveal' | 'finished'
+export type Phase = 'lobby' | 'briefing' | 'playing' | 'reveal' | 'finished'
 export type MarketStatus = 'pre_open' | 'open' | 'halted' | 'closed'
 
 export interface PlayerInfo {
@@ -24,8 +24,22 @@ export interface RoomMsg {
   players: PlayerInfo[]
   scores: Record<string, number>
   reveal_until: number | null
+  ready: string[] // during the briefing: humans who are ready for the bell
   server_now: number
   bot_types: string[]
+}
+
+/** Before each round: your own slip and memo, with the clock not yet running. */
+export interface BriefingMsg {
+  type: 'briefing'
+  round_number: number
+  rounds: number
+  contract: Contract
+  recipe: { title: string; description: string; factor_names: string[]; min: number; max: number }
+  clue: { flavor: string; precise: string }
+  objective: { id: string; title: string; description: string; bonus: number }
+  round_seconds: number
+  opening_seconds: number
 }
 
 export interface RoundStartMsg {
@@ -187,6 +201,7 @@ export type GameEvent =
 export type ServerMsg =
   | { type: 'welcome'; player_id: string; token: string; code: string; protocol: number }
   | RoomMsg
+  | BriefingMsg
   | RoundStartMsg
   | MarketMsg
   | YouMsg

@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef } from 'react'
 import type {
+  BriefingMsg,
   GameEvent,
   MarketMsg,
   PlayerInfo,
@@ -39,6 +40,7 @@ export interface GameState {
   me: string | null
   code: string | null
   room: RoomMsg | null
+  briefing: BriefingMsg | null
   round: RoundStartMsg | null
   market: MarketMsg | null
   you: YouMsg | null
@@ -57,6 +59,7 @@ const initial: GameState = {
   me: null,
   code: null,
   room: null,
+  briefing: null,
   round: null,
   market: null,
   you: null,
@@ -124,12 +127,14 @@ function applyMessage(state: GameState, msg: ServerMsg, receivedAt: number): Gam
       return { ...state, me: msg.player_id, code: msg.code }
     case 'room': {
       const next = { ...state, ...withClock, room: msg }
-      if (msg.phase === 'lobby') return { ...next, round: null, market: null, you: null, reveal: null, feed: [], runners: [], myTrades: [] }
+      if (msg.phase === 'lobby') return { ...next, briefing: null, round: null, market: null, you: null, reveal: null, feed: [], runners: [], myTrades: [] }
       if (msg.phase === 'playing' && state.room?.phase !== 'playing') return { ...next, reveal: null }
       return next
     }
+    case 'briefing':
+      return { ...state, briefing: msg }
     case 'round_start':
-      return { ...state, ...withClock, round: msg, reveal: null, feed: [], runners: [], myTrades: [], market: null, you: null }
+      return { ...state, ...withClock, briefing: null, round: msg, reveal: null, feed: [], runners: [], myTrades: [], market: null, you: null }
     case 'market':
       return { ...state, ...withClock, market: msg }
     case 'you':

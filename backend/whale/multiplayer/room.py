@@ -44,7 +44,9 @@ from whale.engine import (
 )
 from whale.game.contracts import Contract, pick_contract
 from whale.game.recipes import PIT_SIX, Recipe
+from whale.game.objectives import Objective
 from whale.game.round import Round, RoundConfig, RoundResult
+from whale.game.setup import RoundSetup
 from whale.game.setup import new_seed
 from whale.runtime.visibility import is_visible
 
@@ -68,6 +70,7 @@ class RoomError(Exception):
 
 class RoomPhase(StrEnum):
     LOBBY = "lobby"
+    BRIEFING = "briefing"  # before each round: read your slip and memo, then ready up
     PLAYING = "playing"
     REVEAL = "reveal"  # between rounds
     FINISHED = "finished"  # match over
@@ -106,6 +109,17 @@ class _RoundState:
     flushed_log_len: int = 0
 
 
+@dataclass(slots=True)
+class _Briefing:
+    """The next round, dealt but not started: its clock starts at the bell."""
+
+    seed: int
+    contract: Contract
+    setup: RoundSetup
+    objectives: dict[str, Objective]
+    ready: set[str] = field(default_factory=set)
+
+
 class RoomCore:
     def __init__(
         self,
@@ -127,6 +141,7 @@ class RoomCore:
         self.reveals: list[dict[str, Any]] = []
         self.reveal_until: int | None = None
         self._rs: _RoundState | None = None
+        self._briefing: _Briefing | None = None
         self._out: list[Outgoing] = []
         self._now = 0
         self._next_human = 1
@@ -171,6 +186,7 @@ class RoomCore:
         if self.phase is RoomPhase.LOBBY and pid == self.host_id:
             self.host_id = next((s.id for s in self.seats.values() if not s.is_bot and s.connected), self.host_id)
         self._broadcast_room()
+        self._begin_if_ready(now)
 
     def has_connected_humans(self) -> bool:
         return any(s.connected for s in self.seats.values() if not s.is_bot)
@@ -229,6 +245,15 @@ class RoomCore:
             case p.AddBot() | p.RemovePlayer() | p.UpdateSettings() | p.Start():
                 self._require_host(pid, RoomPhase.LOBBY)
                 self._lobby_action(msg, now)
+            case p.Ready():
+                if self.phase is not RoomPhase.BRIEFING or self._briefing is None:
+                    raise RoomError("You can't do that right now.")
+                self._briefing.ready.add(pid)
+                self._broadcast_room()
+                self._begin_if_ready(now)
+            case p.Begin():
+                self._require_host(pid, RoomPhase.BRIEFING)
+                self._start_round(now)
             case p.NextRound():
                 self._require_host(pid, RoomPhase.REVEAL)
                 self._next_round(now)
@@ -237,7 +262,7 @@ class RoomCore:
                 self.scores = {sid: 0 for sid in self.seats}
                 self.reveals = []
                 self.round_number = 0
-                self._start_round(now)
+                self._brief_round(now)
             case _:
                 self._trade(pid, msg, now)
 
@@ -265,7 +290,7 @@ class RoomCore:
                 if len(self.seats) < 2:
                     raise RoomError("You need at least 2 players. Add a bot!")
                 self.scores = {sid: 0 for sid in self.seats}
-                self._start_round(now)
+                self._brief_round(now)
                 return
         self._broadcast_room()
 
@@ -359,11 +384,35 @@ class RoomCore:
             self.phase = RoomPhase.FINISHED
             self._broadcast_room()
             return
-        self._start_round(now)
+        self._brief_round(now)
 
-    def _start_round(self, now: int) -> None:
+    def _brief_round(self, now: int) -> None:
+        """Deal the next round and wait for the players to ready up."""
         self.round_number += 1
         seed = self._seed_fn()
+        setup, objectives = Round.deal(self.recipe, list(self.seats), seed, RoundConfig().dealing)
+        self._briefing = _Briefing(seed, pick_contract(random.Random(seed ^ 0xC0DE)), setup, objectives)
+        self._rs = None
+        self.phase = RoomPhase.BRIEFING
+        self.reveal_until = None
+        self._broadcast_room()
+        for pid in self._humans():
+            self._send(pid, self._briefing_message(pid))
+
+    def _begin_if_ready(self, now: int) -> None:
+        """Ring the bell once every connected human is ready (and at least one is)."""
+        b = self._briefing
+        if self.phase is not RoomPhase.BRIEFING or b is None:
+            return
+        here = [pid for pid in self._humans() if self.seats[pid].connected]
+        if here and all(pid in b.ready for pid in here):
+            self._start_round(now)
+
+    def _start_round(self, now: int) -> None:
+        b = self._briefing
+        assert b is not None
+        self._briefing = None
+        seed = b.seed
         players = list(self.seats)
         config = RoundConfig(
             opening_ms=self.settings.opening_seconds * 1000,
@@ -379,7 +428,7 @@ class RoomCore:
         }
         self._rs = _RoundState(
             round=rnd,
-            contract=pick_contract(rng),
+            contract=b.contract,
             runner=BotRunner(rnd, bots, rng, start=now),
             cursors={pid: 0 for pid in self._humans()},
         )
@@ -428,6 +477,8 @@ class RoomCore:
         self._send(pid, {"type": "welcome", "player_id": pid, "token": seat.token, "code": self.code,
                          "protocol": p.PROTOCOL_VERSION})
         self._send(pid, self._room_message())
+        if self.phase is RoomPhase.BRIEFING and self._briefing is not None:
+            self._send(pid, self._briefing_message(pid))
         rs = self._rs
         if rs is not None and pid in rs.round.setup.clues:
             self._send(pid, self._round_start_message(pid))
@@ -462,8 +513,36 @@ class RoomCore:
             ],
             "scores": {pid: c / CENTS_PER_POINT for pid, c in self.scores.items()},
             "reveal_until": self.reveal_until,
+            "ready": sorted(self._briefing.ready) if self.phase is RoomPhase.BRIEFING and self._briefing else [],
             "server_now": self._now,
             "bot_types": [x.name for x in PERSONALITIES],
+        }
+
+    def _briefing_message(self, pid: str) -> dict[str, Any]:
+        """The player's own slip and memo for the coming round. Nothing else
+        about the deal: the hidden state stays on the server."""
+        b = self._briefing
+        assert b is not None
+        clue = b.setup.clues[pid]
+        objective = b.objectives[pid]
+        c = b.contract
+        return {
+            "type": "briefing",
+            "round_number": self.round_number,
+            "rounds": self.settings.rounds,
+            "contract": {"name": c.name, "pit": c.pit, "description": c.description},
+            "recipe": {
+                "title": self.recipe.title,
+                "description": self.recipe.describe(),
+                "factor_names": [comp.name for comp in self.recipe.components],
+                "min": self.recipe.price_min,
+                "max": self.recipe.price_max,
+            },
+            "clue": {"flavor": clue.flavor, "precise": clue.precise},
+            "objective": {"id": objective.id, "title": objective.title, "description": objective.description,
+                          "bonus": objective.bonus},
+            "round_seconds": self.settings.round_seconds,
+            "opening_seconds": self.settings.opening_seconds,
         }
 
     def _round_start_message(self, pid: str) -> dict[str, Any]:

@@ -40,7 +40,13 @@ def started_room(humans: int = 2, bots: int = 2) -> tuple[RoomCore, list[str]]:
     for _ in range(bots):
         room.handle(pids[0], {"type": "add_bot"}, now=10)
     room.handle(pids[0], {"type": "start"}, now=20)
+    ready_all(room, pids, now=20)
     return room, pids
+
+
+def ready_all(room: RoomCore, pids: list[str], now: int) -> None:
+    for pid in pids:
+        room.handle(pid, {"type": "ready"}, now)
 
 
 # -- lobby -------------------------------------------------------------------------
@@ -73,7 +79,7 @@ def test_start_needs_two_players_unless_filling_with_bots() -> None:
     room.handle(host, {"type": "start"}, 1)
     assert "at least 2" in of_type(inbox(room)[host], "error")[0]["message"]
     room.handle(host, {"type": "start", "fill_bots": True}, 2)
-    assert room.phase is RoomPhase.PLAYING
+    assert room.phase is RoomPhase.BRIEFING
     assert len(room.seats) == 4
 
 
@@ -155,7 +161,9 @@ def play_match(room: RoomCore, pids: list[str], rng: random.Random) -> dict[str,
         now += rng.randint(50, 1_500)
         pid = rng.choice(pids)
         roll = rng.random()
-        if room.phase is RoomPhase.PLAYING:
+        if room.phase is RoomPhase.BRIEFING:
+            room.handle(pid, {"type": "ready"}, now)
+        elif room.phase is RoomPhase.PLAYING:
             if roll < 0.4:
                 bid = rng.randint(95, 104)
                 room.handle(pid, {"type": "quote", "bid": bid, "bid_qty": 5, "ask": bid + rng.randint(1, 4), "ask_qty": 5}, now)
@@ -197,7 +205,7 @@ def test_rematch_starts_over() -> None:
     room, pids = started_room()
     play_match(room, pids, random.Random(2))
     room.handle(pids[0], {"type": "rematch"}, 10**7)
-    assert room.phase is RoomPhase.PLAYING and room.round_number == 1
+    assert room.phase is RoomPhase.BRIEFING and room.round_number == 1
     assert all(v == 0 for v in room.scores.values())
 
 
@@ -206,7 +214,64 @@ def test_host_can_skip_the_reveal() -> None:
     room.tick(20 + 65_001)  # past the first round's close
     assert room.phase is RoomPhase.REVEAL
     room.handle(pids[0], {"type": "next_round"}, 20 + 65_002)
-    assert room.phase is RoomPhase.PLAYING and room.round_number == 2
+    assert room.phase is RoomPhase.BRIEFING and room.round_number == 2
+
+
+# -- the briefing ----------------------------------------------------------------
+
+
+def briefed_room(humans: int = 2) -> tuple[RoomCore, list[str]]:
+    room = new_room()
+    pids = [room.join(f"Human{i}", now=i)[0] for i in range(humans)]
+    room.handle(pids[0], {"type": "start", "fill_bots": True}, now=20)
+    return room, pids
+
+
+def test_briefing_deals_without_starting_the_clock() -> None:
+    room, pids = briefed_room()
+    msgs = inbox(room)
+    assert room.phase is RoomPhase.BRIEFING and room.next_wakeup() is None
+    briefs = {pid: of_type(msgs[pid], "briefing")[0] for pid in pids}
+    assert not of_type(msgs[pids[0]], "round_start")
+    room.tick(10**6)  # nothing happens however long players read
+    assert room.phase is RoomPhase.BRIEFING
+    ready_all(room, pids, now=10**6)
+    msgs = inbox(room)
+    for pid in pids:
+        start = of_type(msgs[pid], "round_start")[0]
+        # The round deals exactly what the briefing showed, and its clock starts at the bell.
+        assert start["clue"] == briefs[pid]["clue"] and start["objective"] == briefs[pid]["objective"]
+        assert start["contract"] == briefs[pid]["contract"]
+        assert start["opens_at"] == 10**6 + 5_000
+
+
+def test_bell_waits_for_every_connected_human() -> None:
+    room, pids = briefed_room(humans=3)
+    room.handle(pids[0], {"type": "ready"}, 30)
+    room.handle(pids[1], {"type": "ready"}, 31)
+    assert room.phase is RoomPhase.BRIEFING
+    assert of_type(inbox(room)[pids[2]], "room")[-1]["ready"] == sorted(pids[:2])
+    room.disconnect(pids[2], 40)  # the one holdout leaves: no need to wait for them
+    assert room.phase is RoomPhase.PLAYING
+
+
+def test_host_can_ring_the_bell_early() -> None:
+    room, pids = briefed_room()
+    room.handle(pids[1], {"type": "begin"}, 30)
+    assert "Only the host" in of_type(inbox(room)[pids[1]], "error")[0]["message"]
+    room.handle(pids[0], {"type": "begin"}, 31)
+    assert room.phase is RoomPhase.PLAYING
+
+
+def test_resume_during_briefing_resends_it() -> None:
+    room = new_room()
+    host, token = room.join("Alex", 0)
+    room.handle(host, {"type": "start", "fill_bots": True}, 1)
+    room.disconnect(host, 2)
+    assert room.phase is RoomPhase.BRIEFING  # nobody here, nobody ready: keep waiting
+    inbox(room)
+    room.resume(token, 3)
+    assert [m["type"] for m in inbox(room)[host]] == ["welcome", "room", "briefing", "room"]
 
 
 # -- reconnects --------------------------------------------------------------------
@@ -216,6 +281,7 @@ def test_resume_restores_full_state() -> None:
     room = new_room()
     host, token = room.join("Alex", 0)
     room.handle(host, {"type": "start", "fill_bots": True}, 1)
+    room.handle(host, {"type": "ready"}, 1)
     room.handle(host, {"type": "quote", "bid": 97, "bid_qty": 5, "ask": 103, "ask_qty": 5}, 1_000)
     room.disconnect(host, 2_000)
     room.tick(8_000)

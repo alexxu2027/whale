@@ -93,6 +93,12 @@ class RoundResult:
     house_cash_cents: int
 
 
+def _seeds(seed: int) -> tuple[int, int, int, int]:
+    """(setup, exchange, objective, runner) seeds, derived in a fixed order."""
+    root = random.Random(seed)
+    return root.getrandbits(64), root.getrandbits(64), root.getrandbits(64), root.getrandbits(64)
+
+
 class Round:
     def __init__(
         self,
@@ -105,13 +111,9 @@ class Round:
     ) -> None:
         self.config = config or RoundConfig()
         self.seed = new_seed() if seed is None else seed
-        root = random.Random(self.seed)
-        setup_seed, exchange_seed = root.getrandbits(64), root.getrandbits(64)
-        objective_seed = root.getrandbits(64)
-        runner_seed = root.getrandbits(64)
+        _, exchange_seed, _, runner_seed = _seeds(self.seed)
 
-        self.setup: RoundSetup = setup_round(recipe, players, setup_seed, self.config.dealing)
-        self.objectives: dict[str, Objective] = deal_objectives(players, random.Random(objective_seed))
+        self.setup, self.objectives = Round.deal(recipe, players, self.seed, self.config.dealing)
         market = replace(
             self.config.market,
             price_min=recipe.price_min,
@@ -145,6 +147,16 @@ class Round:
         )
         self._runner_cursor = 0
         self.delivered: dict[str, list[Clue]] = {p: [] for p in players}
+
+    @staticmethod
+    def deal(
+        recipe: Recipe, players: Sequence[str], seed: int, dealing: Dealing = Dealing.ONE_CARD_EACH
+    ) -> tuple[RoundSetup, dict[str, Objective]]:
+        """The clues and objectives a round with this seed deals, without
+        starting its clock (the room shows them in the pre-round briefing)."""
+        setup_seed, _, objective_seed, _ = _seeds(seed)
+        setup = setup_round(recipe, players, setup_seed, dealing)
+        return setup, deal_objectives(players, random.Random(objective_seed))
 
     @property
     def phase(self) -> Phase:

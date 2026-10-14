@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useGame } from './game'
 import { markShot, shotSeen } from './pit/camera'
 import { Stage } from './pit/parts'
+import { Briefing } from './screens/Briefing'
 import { Home } from './screens/Home'
 import { Lobby } from './screens/Lobby'
 import { Play } from './screens/Play'
@@ -49,6 +50,7 @@ export default function App() {
     )
   }
   if (state.room.phase === 'lobby') return <Lobby game={game} />
+  if (state.room.phase === 'briefing') return <Briefing game={game} />
   if ((state.room.phase === 'reveal' || state.room.phase === 'finished') && state.reveal) {
     const key = `whale:close:${state.code}:${state.round?.opens_at ?? state.reveal.round_number}`
     if (state.round && !closed.has(key) && !shotSeen(key)) {
