@@ -9,12 +9,7 @@ export const STAGE_H = 900
 /** The game is drawn on a fixed 1440x900 stage, scaled to fit the window
  * (laptop browsers; pixel art stays crisp at any scale). */
 export function Stage({ children, background = '#16130f' }: { children: ReactNode; background?: string }) {
-  const [scale, setScale] = useState(fit)
-  useEffect(() => {
-    const onResize = () => setScale(fit())
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
+  const scale = useFit()
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: '#0e0c0a', overflow: 'hidden' }}>
       <div style={{ width: STAGE_W * scale, height: STAGE_H * scale, position: 'relative' }}>
@@ -36,6 +31,31 @@ export function Stage({ children, background = '#16130f' }: { children: ReactNod
       </div>
     </div>
   )
+}
+
+/** A see-through layer over whatever Stage is showing, in the same 1440x900
+ * coordinates. Clicks pass through except on children that opt back in. */
+export function StageOverlay({ children }: { children: ReactNode }) {
+  const scale = useFit()
+  return (
+    <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', pointerEvents: 'none', zIndex: 100 }}>
+      <div style={{ width: STAGE_W * scale, height: STAGE_H * scale, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', left: 0, top: 0, width: STAGE_W, height: STAGE_H, transform: `scale(${scale})`, transformOrigin: '0 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function useFit(): number {
+  const [scale, setScale] = useState(fit)
+  useEffect(() => {
+    const onResize = () => setScale(fit())
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return scale
 }
 
 function fit(): number {

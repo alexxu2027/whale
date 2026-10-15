@@ -16,7 +16,7 @@ function line(f: FeedItem, cast: Cast): string | null {
       if (e.taker_id === e.seller_id) return `${b(e.seller_id)} ${verb(e.seller_id, cast, 'SELL')} ${e.qty} TO ${b(e.buyer_id)} AT ${e.price}`
       return `${b(e.buyer_id)} ${verb(e.buyer_id, cast, 'BUY')} ${e.qty} FROM ${b(e.seller_id)} AT ${e.price}`
     case 'call_started':
-      return `${b(e.caller_id)} ASKS ${b(e.responder_id)} FOR A MARKET`
+      return `${b(e.caller_id)} ${verb(e.caller_id, cast, 'ASK')} ${b(e.responder_id)} FOR A MARKET`
     case 'call_answered':
       return `${b(e.responder_id)} ${verb(e.responder_id, cast, 'SHOUT')} ${e.bid_price} AT ${e.ask_price}${e.automatic ? ' (TOO SLOW)' : ''}`
     case 'runner_dispatched':

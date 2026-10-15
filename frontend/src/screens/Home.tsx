@@ -27,7 +27,11 @@ export function Backdrop({ children }: { children: ReactNode }) {
   )
 }
 
-export function Home({ onJoin, error }: { onJoin: (code: string, name: string, solo?: boolean) => void; error: string | null }) {
+export function Home({ onJoin, onPractice, error }: {
+  onJoin: (code: string, name: string, solo?: boolean) => void
+  onPractice: (name: string) => void
+  error: string | null
+}) {
   const params = new URLSearchParams(location.search)
   const [name, setName] = useState(() => {
     try {
@@ -114,10 +118,21 @@ export function Home({ onJoin, error }: { onJoin: (code: string, name: string, s
         {(problem || error) && <p style={{ margin: '12px 0 0', color: 'var(--color-stamp)', fontWeight: 700 }}>{problem ?? error}</p>}
       </section>
 
-      <div className="paper" style={{ position: 'absolute', left: 470, top: 690, width: 500, padding: '12px 18px', fontSize: 16, lineHeight: 1.35 }}>
-        The contract settles at 100 plus six hidden market drivers. You start the round knowing one; a runner may bring you another. Buy
-        below where you think it settles, sell above, and watch who's trading with you.
-      </div>
+      <button
+        type="button"
+        className="paper"
+        onClick={() => onPractice(cleanName)}
+        style={{ position: 'absolute', left: 470, top: 668, width: 500, padding: '12px 18px', textAlign: 'left', fontSize: 16, lineHeight: 1.35, color: 'var(--color-ink)', background: '#d8c464' }}
+      >
+        <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span className="silk" style={{ fontSize: 15 }}>FIRST TIME ON THE FLOOR?</span>
+          <span className="silk" style={{ fontSize: 15, color: 'var(--color-stamp)' }}>PRACTICE ROUND ▸</span>
+        </span>
+        <span style={{ display: 'block', marginTop: 6 }}>
+          A coach walks you through one round against bots: your clue, posting prices, the bell, buying and selling, runners, calls,
+          and the settlement. About five minutes, and nothing counts.
+        </span>
+      </button>
     </Backdrop>
   )
 }

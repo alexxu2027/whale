@@ -7,6 +7,7 @@ import { Home } from './screens/Home'
 import { Lobby } from './screens/Lobby'
 import { Play } from './screens/Play'
 import { Reveal } from './screens/Reveal'
+import { Tutorial } from './tutorial/Tutorial'
 
 export default function App() {
   const game = useGame()
@@ -14,6 +15,8 @@ export default function App() {
   const solo = useRef(false)
   // Rounds whose closing shot has played (the camera pulls back once per round).
   const [closed, setClosed] = useState<Set<string>>(() => new Set())
+  // The practice round runs entirely in the browser; no room, no server.
+  const [practice, setPractice] = useState<string | null>(null)
 
   // "Play solo": as soon as we're the host of the new room, start with bots.
   useEffect(() => {
@@ -31,6 +34,7 @@ export default function App() {
     history.replaceState(null, '', url)
   }, [state.code])
 
+  if (practice !== null) return <Tutorial name={practice} onExit={() => setPractice(null)} />
   if (!state.room || state.connection === 'idle' || state.fatal) {
     const connecting = state.connection === 'connecting' && !state.fatal
     return connecting ? (
@@ -42,6 +46,7 @@ export default function App() {
     ) : (
       <Home
         error={state.fatal}
+        onPractice={setPractice}
         onJoin={(code, name, isSolo) => {
           solo.current = !!isSolo
           game.join(code, name)

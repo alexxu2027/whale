@@ -151,6 +151,10 @@ input {
 @keyframes blink { 50% { opacity: 0.25; } }
 .blink { animation: blink 0.8s steps(1) infinite; }
 
+/* The practice round's coach rings whatever it is talking about. */
+@keyframes coach-spot { 50% { outline-color: rgba(255, 180, 58, 0.35); } }
+.coach-spot { outline: 4px dashed var(--color-led); outline-offset: 2px; animation: coach-spot 1.2s steps(2) infinite; }
+
 /* -- the round camera ----------------------------------------------------------
    At the bell: hold on the whole floor, dive onto your spot, cross into the
    booth. At the close: the booth falls away, the camera pulls back up over
@@ -187,6 +191,6 @@ input {
 .banner-late { animation: banner-late 5s forwards; }
 
 @media (prefers-reduced-motion: reduce) {
-  .bob, .drop-in, .fresh, .ink, .blink { animation: none; }
+  .bob, .drop-in, .fresh, .ink, .blink, .coach-spot { animation: none; }
   .cam-dive, .booth-in, .booth-out, .cam-pull, .paper-in, .banner-early, .banner-late { animation-duration: 0.01s; }
 }
